@@ -35,6 +35,7 @@ body::before {
     radial-gradient(45vmax 45vmax at 90% 90%, rgba(62, 230, 255, .12), transparent 60%),
     radial-gradient(25vmax 25vmax at 80% 15%, rgba(140, 90, 255, .10), transparent 60%);
   animation: drift 36s ease-in-out infinite alternate;
+  will-change: transform;   /* пятна двигает видеокарта, страница из-за них не перерисовывается */
 }
 /* Пятна света медленно плывут */
 @keyframes drift {
@@ -761,6 +762,8 @@ body.viewer-open { overflow: hidden; }
   background: var(--panel); border: 1px solid var(--line); border-radius: 18px; overflow: hidden;
   animation: post-in .55s cubic-bezier(.2, 1, .3, 1) both; animation-delay: calc(var(--i, 0) * 70ms);
   transition: border-color .3s, box-shadow .3s;
+  /* Посты далеко за экраном браузер не рисует, пока до них не долистаешь: лента листается плавнее */
+  content-visibility: auto; contain-intrinsic-size: auto 620px;
 }
 .post:hover { border-color: rgba(255, 79, 216, .45); box-shadow: 0 0 26px rgba(255, 79, 216, .14); }
 @keyframes post-in { from { opacity: 0; transform: translateY(26px) scale(.97); } }

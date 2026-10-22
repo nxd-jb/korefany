@@ -31,6 +31,9 @@ const me = () => state.session?.user?.id;
 const profile = id => state.profiles.find(p => p.id === id);
 const nameOf = id => profile(id)?.name || "Кто-то";
 const thumbPath = m => m.path.replace(/\.[^.\/]+$/, "") + "_t.jpg";
+// Средний размер (1280px) для ленты и обложки: в 3–4 раза легче оригинала, а на экране телефона не отличить.
+// Есть только у фото, загруженных после v55; для старых берётся оригинал
+const midPath = m => m.kind === "photo" ? m.path.replace(/\.[^.\/]+$/, "") + "_m.jpg" : null;
 // Поле для текста растёт под текст. Полоса прокрутки появляется, только когда дошли до максимальной высоты
 function autoGrow(ta) {
   const cs = getComputedStyle(ta);
@@ -161,14 +164,72 @@ async function loadAll() {
   state.quotes = q.data || [];
 }
 
+// ---------- Сохранённые данные: сайт открывается сразу, а свежие данные догружаются следом ----------
+// Всё, что видно на сайте, после загрузки складываем в память браузера (localStorage) — своё у каждого человека.
+// При следующем открытии сразу рисуем из неё, а Supabase спрашиваем уже в фоне
+
+const cacheKey = () => "korefany-data-" + me();
+// Только данные (без ссылок на файлы и времени) — по этой строке понимаем, изменилось ли что-то
+const dataRaw = () => JSON.stringify([state.profiles, state.media, state.quotes, state.mr, state.qr, state.comments,
+  state.quotesReady, state.reactsReady, state.commentsReady, chat.ready, chat.list, chat.members, chat.last, chat.unread]);
+
+function saveCache() {
+  if (!me()) return null;
+  const raw = dataRaw();
+  const now = Date.now();
+  const urls = Object.fromEntries(Object.entries(state.urls).filter(([, v]) => v.until > now + 5 * 60e3));
+  const chatUrls = Object.fromEntries(Object.entries(chat.urls).filter(([, v]) => v.until > now + 5 * 60e3));
+  try {
+    localStorage.setItem(cacheKey(), JSON.stringify({ v: 1, raw, urls, chatUrls, reads: chat.reads, lastPoll: chat.lastPoll }));
+  } catch (e) {
+    try { localStorage.removeItem(cacheKey()); } catch (e2) {}   // не влезло в память — просто не храним
+  }
+  return raw;
+}
+
+function readCache() {
+  try {
+    const c = JSON.parse(localStorage.getItem(cacheKey()) || "null");
+    if (!c || c.v !== 1) return null;
+    const [profiles, media, quotes, mr, qr, comments, qReady, rReady, cReady, chReady, list, members, last, unread] = JSON.parse(c.raw);
+    Object.assign(state, { profiles, media, quotes, mr, qr, comments, quotesReady: qReady, reactsReady: rReady, commentsReady: cReady });
+    Object.assign(state.urls, c.urls || {});
+    Object.assign(chat, { ready: chReady, list, members, last, unread, reads: c.reads || {}, lastPoll: c.lastPoll });
+    Object.assign(chat.urls, c.chatUrls || {});
+    Object.values(last || {}).forEach(m => chat.seen.add(m.id));
+    return c.raw;
+  } catch (e) { return null; }
+}
+
+// Свежие данные пришли в фоне: тихо подменяем. Страницу перерисовываем, только если человек ещё
+// ничего не начал на ней делать — иначе новое увидит при следующем переходе
+async function refreshInBackground(oldRaw) {
+  try {
+    await Promise.all([loadAll(), loadChats().catch(() => { chat.ready = false; })]);
+  } catch (e) { return; }
+  const raw = saveCache();
+  paintChatBadge();
+  refreshChatSide();
+  if (raw === oldRaw) return;
+  const h = location.hash.replace(/^#/, "") || "/";
+  const calm = !document.getElementById("viewer") && scrollY < 40 && !document.activeElement?.matches?.("input, textarea") &&
+    !/^\/(chat|upload|me)/.test(h);
+  if (calm) route();
+}
+// Ушёл из приложения — запоминаем, что накопилось (новые комментарии, реакции)
+document.addEventListener("visibilitychange", () => { if (document.hidden && state.session) saveCache(); });
+
 // Файлы закрытые, поэтому для показа берём временные ссылки на час
 async function signed(paths) {
   const now = Date.now();
-  const need = [...new Set(paths)].filter(p => !state.urls[p] || state.urls[p].until < now);
-  for (let i = 0; i < need.length; i += 100) {
-    const { data } = await sb.storage.from(BUCKET).createSignedUrls(need.slice(i, i + 100), 3600);
-    (data || []).forEach(r => { if (r.signedUrl) state.urls[r.path] = { url: r.signedUrl, until: now + 50 * 60 * 1000 }; });
-  }
+  const need = [...new Set(paths.filter(Boolean))].filter(p => !state.urls[p] || state.urls[p].until < now);
+  // Порции по 100 уходят одновременно, а не по очереди
+  await Promise.all(Array.from({ length: Math.ceil(need.length / 100) }, async (_, i) => {
+    const part = need.slice(i * 100, i * 100 + 100);
+    const { data } = await sb.storage.from(BUCKET).createSignedUrls(part, 3600);
+    // Файла нет (например, среднего размера у старого фото) — запоминаем пустую ссылку, чтобы не спрашивать снова
+    if (data) data.forEach(r => { if (r.path) state.urls[r.path] = { url: r.signedUrl || "", until: now + 50 * 60 * 1000 }; });
+  }));
 }
 const url = p => state.urls[p]?.url || "";
 
@@ -357,7 +418,7 @@ async function appendPosts() {
   f.loading = true;
   const part = f.list.slice(f.shown, f.shown + FEED_STEP);
   f.shown += part.length;
-  try { await signed(part.flatMap(m => [m.path, thumbPath(m)])); } finally { f.loading = false; }
+  try { await signed(part.flatMap(m => [m.path, thumbPath(m), midPath(m)])); } finally { f.loading = false; }
   if (!document.body.contains(feed)) return;
   let html = "";
   part.forEach((m, i) => {
@@ -380,7 +441,7 @@ function postHtml(m, i = 0) {
     </header>
     <div class="post-media" data-post-media="${m.id}">${m.kind === "video"
       ? `<video src="${url(m.path)}" poster="${url(thumbPath(m))}" controls playsinline preload="none"></video>`
-      : `<img src="${url(m.path)}" alt="${esc(m.caption || "")}" loading="lazy">`}</div>
+      : `<img src="${url(midPath(m)) || url(m.path)}" alt="${esc(m.caption || "")}" loading="lazy" decoding="async">`}</div>
     <div class="post-body">
       <div class="post-actions">
         ${reactButtons("m", m.id)}
@@ -440,7 +501,7 @@ async function coverHtml() {
   // Перемешиваем и берём до 12 штук — при каждом открытии ленты набор новый
   for (let i = photos.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [photos[i], photos[j]] = [photos[j], photos[i]]; }
   const slides = photos.slice(0, COVER_COUNT);
-  await signed(slides.flatMap(m => [m.path, thumbPath(m)]));
+  await signed(slides.flatMap(m => [m.path, thumbPath(m), midPath(m)]));
   const dates = state.media.map(m => new Date(m.taken_at || m.created_at).getTime());
   const first = dates.length ? Math.min(...dates) : Date.now();
   const days = Math.max(1, Math.floor((Date.now() - first) / 864e5));
@@ -448,7 +509,7 @@ async function coverHtml() {
   return `<section class="cover" id="cover">
     ${slides.map((m, i) => `<div class="cover-slide${i === 0 ? " on" : ""}" data-cover-open="${m.id}">
       <img class="cs-bg" src="${url(thumbPath(m)) || url(m.path)}" alt="">
-      <img class="cs-fg" ${i < 2 ? "src" : "data-src"}="${url(m.path)}" alt="" decoding="async">
+      <img class="cs-fg" ${i < 2 ? "src" : "data-src"}="${url(midPath(m)) || url(m.path)}" alt="" decoding="async">
     </div>`).join("")}
     ${slides.length > 1 ? `<div class="cover-dots">${slides.map((_, i) => `<i class="${i === 0 ? "on" : ""}"></i>`).join("")}</div>` : ""}
     <div class="cover-in">
@@ -977,7 +1038,8 @@ function renderMeTab() {
         <div class="row"><button class="btn" type="submit">Сменить пароль</button><p class="msg" id="passMsg"></p></div>
       </form>
       <div class="card"><h2 style="margin:0">Выход</h2><p class="msg">На этом устройстве нужно будет снова ввести почту и пароль.</p>
-        <div><button class="btn danger" id="logout" type="button">Выйти</button></div></div>`;
+        <div><button class="btn danger" id="logout" type="button">Выйти</button></div></div>
+      <p class="msg">Версия сайта: ${APP_VERSION || "?"}</p>`;
     document.getElementById("passForm").onsubmit = async e => {
       e.preventDefault();
       const m = document.getElementById("passMsg");
@@ -989,6 +1051,9 @@ function renderMeTab() {
     document.getElementById("logout").onclick = async () => {
       // Отвязываем этот телефон от уведомлений: иначе после выхода сюда приходили бы чужие сообщения
       await unlinkPushDevice();
+      // Сохранённые на телефоне фото и данные — только для вошедшего, при выходе стираем
+      try { await caches.delete("korefany-pics-v1"); } catch (e) {}
+      try { Object.keys(localStorage).filter(k => k.startsWith("korefany-data-")).forEach(k => localStorage.removeItem(k)); } catch (e) {}
       sb.auth.signOut();
     };
   }
@@ -1268,7 +1333,7 @@ document.addEventListener("click", async e => {
     // Сначала запись в базе, потом файлы: если удаление не прошло, пост не останется без картинки
     const { error } = await sb.from("media").delete().eq("id", m.id);
     if (error) { del.disabled = false; del.textContent = "Не удалилось, ещё раз?"; return; }
-    await sb.storage.from(BUCKET).remove([m.path, thumbPath(m)]);
+    await sb.storage.from(BUCKET).remove([m.path, thumbPath(m), midPath(m)].filter(Boolean));
     closeViewer(); await loadAll(); route();
   }
 });
@@ -1287,7 +1352,7 @@ document.addEventListener("keydown", e => {
 async function uploadOne(file, { tags, caption, takenAt }) {
   const id = crypto.randomUUID();
   const isVideo = file.type.startsWith("video/");
-  let main, thumb, ext;
+  let main, thumb, mid = null, ext;
 
   if (isVideo) {
     if (file.size > KOREFANY.maxVideoMb * 1024 * 1024) throw new Error(`видео больше ${KOREFANY.maxVideoMb} МБ`);
@@ -1295,15 +1360,18 @@ async function uploadOne(file, { tags, caption, takenAt }) {
     ext = (file.name.split(".").pop() || "mp4").toLowerCase();
     thumb = await videoThumb(file);
   } else {
-    main = await resizeImage(file, 2560, 0.85);
-    thumb = await resizeImage(file, 640, 0.8);
+    const img = await decodeImage(file);
+    [main, mid, thumb] = await Promise.all([scaleTo(img, 2560, 0.85), scaleTo(img, 1280, 0.82), scaleTo(img, 640, 0.8)]);   // mid — для ленты
     ext = "jpg";
   }
 
   const path = `${me()}/${id}.${ext}`;
   let r = await sb.storage.from(BUCKET).upload(path, main, { contentType: isVideo ? file.type : "image/jpeg" });
   if (r.error) throw r.error;
-  if (thumb) await sb.storage.from(BUCKET).upload(`${me()}/${id}_t.jpg`, thumb, { contentType: "image/jpeg" });
+  await Promise.all([
+    thumb && sb.storage.from(BUCKET).upload(`${me()}/${id}_t.jpg`, thumb, { contentType: "image/jpeg" }),
+    mid && sb.storage.from(BUCKET).upload(`${me()}/${id}_m.jpg`, mid, { contentType: "image/jpeg" })
+  ]);
 
   r = await sb.from("media").insert({ id, path, kind: isVideo ? "video" : "photo", caption: caption || null, taken_at: takenAt });
   if (r.error) throw r.error;
@@ -1360,7 +1428,10 @@ const sizeOf = img => [img.naturalWidth || img.width, img.naturalHeight || img.h
 
 // Уменьшаем фото, чтобы экономить место. Поворот с телефона учитывается.
 async function resizeImage(file, maxSide, quality) {
-  const img = await decodeImage(file);
+  return scaleTo(await decodeImage(file), maxSide, quality);
+}
+// Уменьшить уже открытую картинку. Нужна, чтобы при загрузке открывать фото один раз, а не трижды (HEIC открывается долго)
+function scaleTo(img, maxSide, quality) {
   const [w, h] = sizeOf(img);
   const k = Math.min(1, maxSide / Math.max(w, h));
   const [c, ctx] = darkCanvas(Math.round(w * k), Math.round(h * k));
@@ -1443,16 +1514,35 @@ window.addEventListener("hashchange", route);
 
 // Проверяем, открывается ли Supabase напрямую. Если провайдер его режет,
 // работаем через посредника (на Netlify — файл _redirects, на Cloudflare — Worker из config.js).
+// Выбор запоминается: если в прошлый раз Supabase напрямую не открывался, сразу идём через посредника
+// и не ждём по 5 секунд при каждом запуске. Напрямую перепроверяем раз в сутки
 async function pickServer() {
   if (!KOREFANY.proxyUrl) return KOREFANY.url;   // посредника нет — сразу напрямую
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem("korefany-server") || "null"); } catch (e) {}
+  // Посредника перепроверяем чаще (раз в 6 часов): вдруг тогда просто моргнул интернет
+  const fresh = saved && Date.now() - saved.at < (saved.proxy ? 6 * 3600e3 : 864e5);
+  if (fresh && saved.proxy) return KOREFANY.proxyUrl;
+  // Вчера напрямую работало — стартуем напрямую сразу, а проверяем в фоне.
+  // Если вдруг перестало, запоминаем посредника и перезапускаем сайт уже через него
+  if (fresh) {
+    directWorks().then(ok => { if (!ok && navigator.onLine) location.reload(); });
+    return KOREFANY.url;
+  }
+  return (await directWorks()) ? KOREFANY.url : KOREFANY.proxyUrl;
+}
+async function directWorks() {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 5000);
+  let ok = false;
   try {
     const r = await fetch(KOREFANY.url + "/auth/v1/health", { headers: { apikey: KOREFANY.key }, signal: ctrl.signal });
-    if (r.ok) return KOREFANY.url;
+    ok = r.ok;
   } catch (e) {}
   finally { clearTimeout(t); }
-  return KOREFANY.proxyUrl || KOREFANY.url;
+  // Без интернета вообще ничего не запоминаем — это не блокировка
+  if (ok || navigator.onLine) try { localStorage.setItem("korefany-server", JSON.stringify({ proxy: !ok, at: Date.now() })); } catch (e) {}
+  return ok;
 }
 
 async function start() {
@@ -1478,6 +1568,15 @@ function listenAuth() { sb.auth.onAuthStateChange((event, session) => {
   setTimeout(async () => {
     if (!session) { stopLive(); state.profiles = []; state.media = []; return viewLogin(); }
     if (was !== session.user.id) {
+      // Уже заходил с этого устройства — показываем сохранённое сразу, свежее догрузится в фоне
+      const cached = readCache();
+      if (cached) {
+        route();
+        startLive();
+        syncPush();
+        refreshInBackground(cached);
+        return;
+      }
       // Мерцающие заготовки ленты, пока грузятся данные (такие же стоят в index.html)
       const heights = [180, 240, 150, 210, 230, 160, 200, 170];
       $app.innerHTML = `<div class="loading skeleton" aria-label="Загружаю"><div class="sk-top"></div><div class="sk-body">
@@ -1487,8 +1586,11 @@ function listenAuth() { sb.auth.onAuthStateChange((event, session) => {
       // Если сервер молчит 20 секунд, не крутим загрузку вечно, а говорим, что делать
       const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), 20000));
       try {
+        // Лента и мессенджер грузятся одновременно; мессенджер не мешает остальному сайту
+        const chats = loadChats().catch(() => { chat.ready = false; });
         await Promise.race([loadAll(), timeout]);
-        try { await loadChats(); } catch (e) { chat.ready = false; }   // мессенджер не мешает остальному сайту
+        await chats;
+        saveCache();
       }
       catch (err) {
         $app.innerHTML = err.message === "timeout"
@@ -1633,6 +1735,27 @@ function onNewStuff(kind, row) {
     await loadAll(); location.hash = kind === "media" ? "#/" : "#/quotes"; route();
   });
 }
+
+// ---------- Обновление сайта ----------
+// Приложение с экрана «Домой» на iPhone не перезагружается, а просто «просыпается» со старой версией.
+// Поэтому, когда возвращаешься в него, сверяем номер версии (?v= в index.html) с сайтом и обновляемся сами
+const APP_VERSION = +((document.querySelector('script[src*="app.js?v="]')?.getAttribute("src") || "").match(/v=(\d+)/) || [])[1] || 0;
+let updateCheckedAt = 0;
+async function checkUpdate() {
+  if (!APP_VERSION || Date.now() - updateCheckedAt < 60000) return;
+  updateCheckedAt = Date.now();
+  try {
+    const html = await (await fetch("./?check=" + Date.now(), { cache: "no-store" })).text();
+    const v = +(html.match(/app\.js\?v=(\d+)/) || [])[1];
+    if (!v || v <= APP_VERSION) return;
+    // Если человек что-то пишет, не перезагружаем под рукой, а предлагаем кнопкой
+    const typing = [...document.querySelectorAll("textarea, input[type=text]")].some(x => x.value.trim());
+    if (typing) toast("Вышла новая версия сайта", "Обновить", () => location.reload());
+    else location.reload();
+  } catch (e) {}
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
+setInterval(() => { if (!document.hidden) checkUpdate(); }, 10 * 60 * 1000);
 
 // Неоновая плашка снизу экрана
 function toast(text, action, onAction) {
