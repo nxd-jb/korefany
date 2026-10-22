@@ -14,7 +14,7 @@
   --ok: #5ef0a0;
   --danger: #ff7a8a;
   --font-logo: "Rubik Mono One", "Arial Black", sans-serif;
-  --font-body: "Manrope", "Segoe UI", Arial, sans-serif;
+  --font-body: "Onest", "Segoe UI", Arial, sans-serif;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -463,6 +463,9 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 .voice { display: flex; align-items: center; gap: 10px; min-width: 210px; padding: 2px 0; }
 .v-play { flex: none; width: 38px; height: 38px; border-radius: 50%; border: 0; cursor: pointer; font-size: 14px; display: grid; place-items: center; background: rgba(255, 255, 255, .92); color: #1a0717; }
 .msg:not(.mine) .v-play { background: var(--uc, var(--accent-2)); }
+.v-play { position: relative; padding: 0 !important; }
+.v-play svg { position: absolute; inset: 0; margin: auto; width: 18px; height: 18px; fill: currentColor; }.v-play .i-pause, .voice.playing .v-play .i-play { display: none; }
+.voice.playing .v-play .i-pause { display: block; }
 .v-wave { flex: 1; display: flex; align-items: center; gap: 2px; height: 30px; cursor: pointer; }
 .v-wave i { flex: 1; min-width: 2px; border-radius: 2px; background: rgba(255, 255, 255, .35); transition: background .15s; }
 /* Проигранная часть «волны» — яркие полоски */

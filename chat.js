@@ -332,11 +332,11 @@ async function viewChat(id) {
 
   wireGroupForm();
   const box = document.getElementById("msgs");
-  const sep = document.getElementById("newSep");
-  // Открыли чат: если есть непрочитанные — к полоске «Новые сообщения», иначе в самый низ
-  if (sep) sep.scrollIntoView({ block: "center" }); else box.scrollTop = box.scrollHeight;
+  // Открыли чат — сразу в самый низ, к последнему сообщению
+  box.scrollTop = box.scrollHeight;
   wireComposer(c);
   wireChatScroll();
+  stickToBottom(box);
   paintPin(c);
   wireSwipeReply();
   paintTicks();
@@ -535,6 +535,10 @@ function stopRecording(send) {
 }
 
 // Плеер голосового: кнопка ▶, «волна» из полосок (своя у каждого сообщения) и время
+// Значки ▶ и ❚❚ рисуем сами: iPhone показывает символ ▶ как синий эмодзи-квадрат, и он ещё и съезжал.
+// Какой из двух виден, решает класс .playing (style.css)
+const VOICE_ICONS = `<svg class="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>` +
+  `<svg class="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg>`;
 const voicePlayer = new Audio();
 let voicePlaying = null;
 function voiceHtml(m) {
@@ -542,7 +546,7 @@ function voiceHtml(m) {
   const bars = Array.from({ length: 30 }, (_, i) => { h = (h * 1103515245 + 12345) >>> 0; return 25 + (h % 75); });
   const d = Math.round(m.audio_duration || 0);
   return `<div class="voice" data-voice="${m.id}" style="--p:0%">
-    <button type="button" class="v-play" data-vplay="${m.id}" aria-label="Слушать">▶</button>
+    <button type="button" class="v-play" data-vplay="${m.id}" aria-label="Слушать">${VOICE_ICONS}</button>
     <div class="v-wave" data-vseek="${m.id}">${bars.map(b => `<i style="height:${b}%"></i>`).join("")}</div>
     <span class="v-time">${Math.floor(d / 60)}:${String(d % 60).padStart(2, "0")}</span>
   </div>`;
@@ -552,7 +556,7 @@ async function toggleVoice(id, seekFrac = null) {
   const el = document.querySelector(`[data-voice="${id}"]`);
   if (voicePlaying !== id) {
     await chatSigned([m.audio_path]);   // ссылка живёт час: если чат открыт давно, берём свежую
-    document.querySelectorAll(".voice.playing").forEach(v => { v.classList.remove("playing"); v.querySelector(".v-play").textContent = "▶"; v.querySelectorAll(".v-wave i.on").forEach(b => b.classList.remove("on")); });
+    document.querySelectorAll(".voice.playing").forEach(v => { v.classList.remove("playing"); v.querySelectorAll(".v-wave i.on").forEach(b => b.classList.remove("on")); });
     voicePlayer.src = chatUrl(m.audio_path);
     voicePlaying = id;
   }
@@ -560,10 +564,10 @@ async function toggleVoice(id, seekFrac = null) {
   if (voicePlayer.paused || seekFrac !== null) {
     if (audioCtx?.state === "suspended") audioCtx.resume();
     voicePlayer.play().catch(() => toast("Не получилось воспроизвести"));
-    el?.classList.add("playing"); if (el) el.querySelector(".v-play").textContent = "❚❚";
+    el?.classList.add("playing");
   } else {
     voicePlayer.pause();
-    el?.classList.remove("playing"); if (el) el.querySelector(".v-play").textContent = "▶";
+    el?.classList.remove("playing");
   }
 }
 // Голосовые, записанные в Chrome (webm), браузер считает бесконечными: длину тогда берём из базы
@@ -581,7 +585,7 @@ voicePlayer.addEventListener("timeupdate", () => {
 voicePlayer.addEventListener("ended", () => {
   const el = voicePlaying && document.querySelector(`[data-voice="${voicePlaying}"]`);
   const m = chat.messages.find(x => x.id === voicePlaying);
-  if (el) { el.classList.remove("playing"); el.querySelector(".v-play").textContent = "▶"; el.querySelectorAll(".v-wave i.on").forEach(b => b.classList.remove("on"));
+  if (el) { el.classList.remove("playing"); el.querySelectorAll(".v-wave i.on").forEach(b => b.classList.remove("on"));
     const d = Math.round(m?.audio_duration || 0); el.querySelector(".v-time").textContent = `${Math.floor(d / 60)}:${String(d % 60).padStart(2, "0")}`; }
   voicePlaying = null;
 });
@@ -739,6 +743,7 @@ async function jumpToMessage(id, createdAt) {
     el = document.querySelector(`[data-mid="${id}"]`);
   }
   if (!el) return;
+  chat.atBottom = false;   // ушли вверх к сообщению — не тянем обратно вниз, когда догрузятся фото
   el.scrollIntoView({ behavior: "smooth", block: "center" });
   el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
 }
@@ -851,6 +856,20 @@ function wireChatScroll() {
     }, 700);
   };
 }
+// Фото в переписке догружаются уже после открытия, а на телефоне ещё выезжает клавиатура —
+// из-за этого чат «уплывал» вверх от последнего сообщения. Пока человек внизу, держим его внизу
+let bottomObserver = null;
+function stickToBottom(box) {
+  bottomObserver?.disconnect();
+  if (!window.ResizeObserver) return;
+  bottomObserver = new ResizeObserver(() => {
+    if (!document.body.contains(box)) { bottomObserver.disconnect(); return; }
+    if (chat.atBottom !== false) box.scrollTop = box.scrollHeight;
+  });
+  bottomObserver.observe(box);
+  bottomObserver.observe(document.getElementById("msgsIn"));
+}
+
 function paintToBottom() {
   const btn = document.getElementById("toBottom"); if (!btn) return;
   const n = btn.querySelector(".tb-count");

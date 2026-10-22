@@ -284,14 +284,23 @@ window.addEventListener("resize", () => { navIndicator = null; moveNavIndicator(
 // Когда прокрутили страницу, капсула светится сильнее
 window.addEventListener("scroll", () => document.body.classList.toggle("scrolled", scrollY > 8), { passive: true });
 
+// Сколько записей приходится на каждое значение поля: countBy(state.mr, "media_id") → Map(id фото → число реакций)
+function countBy(list, key) {
+  const map = new Map();
+  for (const x of list) map.set(x[key], (map.get(x[key]) || 0) + 1);
+  return map;
+}
+
 // square: ровная сетка из квадратов (галерея). Без него — плитки в своих пропорциях
 async function grid(list, emptyHtml, square = false) {
   if (!list.length) return `<div class="empty">${emptyHtml}</div>`;
   await signed(list.map(m => thumbPath(m)));
+  // Считаем реакции и комментарии один раз на всю сетку, а не перебираем все реакции для каждой плитки
+  const rcOf = countBy(state.mr, "media_id"), ccOf = countBy(state.comments, "media_id");
   return `<div class="grid${square ? " sq" : ""}">${list.map((m, i) => {
     const t = url(thumbPath(m));
-    const rc = reactsOf("m", m.id).length;
-    const cc = state.comments.filter(c => c.media_id === m.id).length;
+    const rc = rcOf.get(m.id) || 0;
+    const cc = ccOf.get(m.id) || 0;
     return `<button type="button" class="tile" style="--i:${Math.min(i, 20)}" data-open="${m.id}" aria-label="${esc(m.caption || "Открыть")}">
       ${t ? `<img src="${t}" alt="" loading="lazy">` : `<span class="noimg">${m.kind === "video" ? "▶" : "🖼"}</span>`}
       ${m.kind === "video" ? `<span class="play">▶ видео</span>` : ""}
@@ -438,8 +447,8 @@ async function coverHtml() {
   const stat = (n, forms) => `<div><b>${n}</b><span>${plural(n, forms)}</span></div>`;
   return `<section class="cover" id="cover">
     ${slides.map((m, i) => `<div class="cover-slide${i === 0 ? " on" : ""}" data-cover-open="${m.id}">
-      <img class="cs-bg" src="${url(thumbPath(m)) || url(m.path)}" alt="" ${i > 1 ? 'loading="lazy"' : ""}>
-      <img class="cs-fg" src="${url(m.path)}" alt="" ${i > 1 ? 'loading="lazy"' : ""}>
+      <img class="cs-bg" src="${url(thumbPath(m)) || url(m.path)}" alt="">
+      <img class="cs-fg" ${i < 2 ? "src" : "data-src"}="${url(m.path)}" alt="" decoding="async">
     </div>`).join("")}
     ${slides.length > 1 ? `<div class="cover-dots">${slides.map((_, i) => `<i class="${i === 0 ? "on" : ""}"></i>`).join("")}</div>` : ""}
     <div class="cover-in">
@@ -463,9 +472,12 @@ function startCover() {
   const dots = [...cover.querySelectorAll(".cover-dots i")];
   if (slides.length < 2) return;
   let cur = 0;
+  // Большие фото обложки грузятся по очереди: текущее и следующее, а не все 12 сразу при открытии ленты
+  const load = i => { const img = slides[(i + slides.length) % slides.length].querySelector("img[data-src]"); if (img) { img.src = img.dataset.src; img.removeAttribute("data-src"); } };
   const go = (n, dir) => {
     n = (n + slides.length) % slides.length;
     if (n === cur) return;
+    load(n); load(n + 1); load(n - 1);
     const out = slides[cur], inn = slides[n];
     // Новое фото ставим сбоку без анимации, потом плавно заезжает, а старое уезжает в другую сторону
     inn.style.transition = "none"; inn.style.transform = `translateX(${dir * 100}%)`;
@@ -499,7 +511,8 @@ function startCover() {
 const tagged = id => state.media.filter(m => m.people.includes(id));
 
 async function viewPeople() {
-  const bestOf = id => tagged(id).sort((a, b) => reactsOf("m", b.id).length - reactsOf("m", a.id).length)[0];
+  const rcOf = countBy(state.mr, "media_id"), months = allMonthStats();
+  const bestOf = id => tagged(id).sort((a, b) => (rcOf.get(b.id) || 0) - (rcOf.get(a.id) || 0))[0];
   const covers = state.profiles.map(p => bestOf(p.id)).filter(Boolean);
   await signed(covers.map(thumbPath));
   if (state.galleryFilter && !profile(state.galleryFilter)) state.galleryFilter = null;
@@ -510,7 +523,7 @@ async function viewPeople() {
       <div class="posters" id="posters">${state.profiles.map((p, i) => {
         const best = bestOf(p.id);
         const bg = best ? url(thumbPath(best)) : "";
-        const icons = [...new Set(personBadges(p.id).map(b => b.icon))].join(" ");
+        const icons = [...new Set(personBadges(p.id, months).map(b => b.icon))].join(" ");
         return `<div class="poster" role="button" tabindex="0" data-gfilter="${p.id}" aria-pressed="false" style="--i:${Math.min(i, 20)};${ucStyle(p.id)}">
           ${bg ? `<img src="${bg}" alt="" loading="lazy">` : ""}
           <a class="poster-link" href="#/p/${p.id}" title="Открыть профиль">Профиль →</a>
@@ -566,8 +579,8 @@ function profileHero(p, actions = "", editable = false) {
   const tagged = state.media.filter(m => m.people.includes(id)).length;
   const saidBy = state.quotes.filter(q => q.author_id === id);
   const uploaded = state.media.filter(m => m.owner === id);
-  const got = state.mr.filter(r => uploaded.some(m => m.id === r.media_id)).length
-            + state.qr.filter(r => saidBy.some(q => q.id === r.quote_id)).length;
+  const upIds = new Set(uploaded.map(m => m.id)), saidIds = new Set(saidBy.map(q => q.id));
+  const got = state.mr.filter(r => upIds.has(r.media_id)).length + state.qr.filter(r => saidIds.has(r.quote_id)).length;
   const stat = (n, forms) => `<div><b>${n}</b><span>${plural(n, forms)}</span></div>`;
   const cover = p.cover_path && url(p.cover_path);
   const pq = p.pinned_quote && state.quotes.find(q => q.id === p.pinned_quote);
@@ -679,40 +692,47 @@ const NOMS = [
   { key: "laughs", icon: "😂", title: "Комик месяца", unit: ["😂", "😂", "😂"] }
 ];
 
-// Очки каждого корефана за месяц
+// Номер месяца: год × 12 + месяц, по местному времени
+const monthKey = iso => { const d = new Date(iso); return d.getFullYear() * 12 + d.getMonth(); };
+
+// Очки каждого корефана сразу за все месяцы: Map(номер месяца → { id → очки }).
+// Один проход по фото и реакциям вместо того, чтобы для каждого месяца и каждого человека перебирать всё заново
+function allMonthStats() {
+  const mediaById = new Map(state.media.map(x => [x.id, x])), quoteById = new Map(state.quotes.map(q => [q.id, q]));
+  const months = new Map();
+  const s = (k, id) => {
+    let st = months.get(k); if (!st) months.set(k, st = {});
+    return st[id] || (st[id] = { uploads: 0, tags: 0, laughs: 0, likes: 0, score: 0 });
+  };
+  state.media.forEach(x => { const k = monthKey(x.created_at); s(k, x.owner).uploads++; x.people.forEach(p => s(k, p).tags++); });
+  state.mr.forEach(r => { const x = mediaById.get(r.media_id); if (x) s(monthKey(r.created_at), x.owner).likes++; });
+  state.qr.forEach(r => {
+    if (r.emoji !== "laugh") return;
+    const q = quoteById.get(r.quote_id); if (q?.author_id) s(monthKey(r.created_at), q.author_id).laughs++;
+  });
+  months.forEach(st => Object.values(st).forEach(v => { v.score = v.uploads + v.tags + v.likes + v.laughs * 2; }));
+  return months;
+}
+
+// Очки за один месяц (для «Топа») и фото, загруженные в этом месяце
 function monthStats(y, m) {
-  const inMonth = iso => { const d = new Date(iso); return d.getFullYear() === y && d.getMonth() === m; };
-  const monthMedia = state.media.filter(x => inMonth(x.created_at));
-  const stats = {};
-  const s = id => stats[id] || (stats[id] = { uploads: 0, tags: 0, laughs: 0, likes: 0, score: 0 });
-  monthMedia.forEach(x => { s(x.owner).uploads++; x.people.forEach(p => s(p).tags++); });
-  state.mr.filter(r => inMonth(r.created_at)).forEach(r => {
-    const x = state.media.find(x => x.id === r.media_id); if (x) s(x.owner).likes++;
-  });
-  state.qr.filter(r => r.emoji === "laugh" && inMonth(r.created_at)).forEach(r => {
-    const q = state.quotes.find(q => q.id === r.quote_id); if (q?.author_id) s(q.author_id).laughs++;
-  });
-  Object.values(stats).forEach(v => { v.score = v.uploads + v.tags + v.likes + v.laughs * 2; });
-  return { stats, monthMedia };
+  const k = y * 12 + m;
+  return { stats: allMonthStats().get(k) || {}, monthMedia: state.media.filter(x => monthKey(x.created_at) === k) };
 }
 const leaderOf = (stats, key) => Object.entries(stats).filter(([id, v]) => v[key] > 0 && profile(id)).sort((a, b) => b[1][key] - a[1][key])[0];
 
 // Награды корефана: в каких месяцах он выигрывал номинации
-function personBadges(id) {
-  const dates = [...state.media, ...state.quotes].map(x => new Date(x.created_at));
-  if (!dates.length) return [];
-  const now = new Date();
-  let y = Math.min(...dates.map(d => d.getFullYear() * 12 + d.getMonth()));
-  const end = now.getFullYear() * 12 + now.getMonth();
+// months — готовый результат allMonthStats(), чтобы в галерее не считать его заново для каждого корефана
+function personBadges(id, months = allMonthStats()) {
+  const now = new Date(), end = now.getFullYear() * 12 + now.getMonth();
   const out = [];
-  for (; y <= end; y++) {
-    const yy = Math.floor(y / 12), mm = y % 12;
-    const { stats } = monthStats(yy, mm);
+  [...months.keys()].filter(k => k <= end).sort((a, b) => a - b).forEach(k => {
+    const yy = Math.floor(k / 12), mm = k % 12;
     NOMS.forEach(n => {
-      const l = leaderOf(stats, n.key);
-      if (l && l[0] === id) out.push({ ...n, when: `${MONTHS[mm]} ${yy}`, now: y === end });
+      const l = leaderOf(months.get(k), n.key);
+      if (l && l[0] === id) out.push({ ...n, when: `${MONTHS[mm]} ${yy}`, now: k === end });
     });
-  }
+  });
   return out.reverse();
 }
 
@@ -724,8 +744,9 @@ async function viewTop() {
 
   const { stats, monthMedia } = monthStats(y, m);
   // Лучшие фото: загруженные в этом месяце, по числу реакций
+  const rcOf = countBy(state.mr, "media_id");
   const best = monthMedia
-    .map(x => ({ x, n: reactsOf("m", x.id).length }))
+    .map(x => ({ x, n: rcOf.get(x.id) || 0 }))
     .filter(o => o.n > 0).sort((a, b) => b.n - a.n).slice(0, 6).map(o => o.x);
   const leader = key => leaderOf(stats, key);
 
@@ -1527,17 +1548,22 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden && po
 // Проверка новых данных: сравниваем с тем, что уже есть на странице
 async function poll() {
   if (document.hidden || !state.session) return;
-  // Комментарии и реакции — порциями по 1000: если взять только первую тысячу, остальные посчитались бы удалёнными
-  const [c, r, m, q] = await Promise.all([
-    fetchAll(() => sb.from("comments").select("*").order("created_at")),
+  // Комментарии: целиком тянем только новые, а для поиска удалённых хватает списка id — это в разы меньше данных.
+  // Всё порциями по 1000: если взять только первую тысячу, остальные посчитались бы удалёнными
+  const lastC = state.comments.reduce((a, x) => x.created_at > a ? x.created_at : a, "1970-01-01T00:00:00Z");
+  const [cNew, cIds, r, m, q] = await Promise.all([
+    sb.from("comments").select("*").gte("created_at", lastC).order("created_at"),
+    fetchAll(() => sb.from("comments").select("id").order("created_at")),
     fetchAll(() => sb.from("media_reactions").select("*").order("created_at")),
     sb.from("media").select("id, owner, created_at").order("created_at", { ascending: false }).limit(20),
     sb.from("quotes").select("id, added_by, created_at").order("created_at", { ascending: false }).limit(20)
   ]);
-  if (c.data) {
-    const fresh = new Set(c.data.map(x => x.id));
-    c.data.filter(x => !state.comments.some(y => y.id === x.id)).forEach(x => onComment("INSERT", x));
-    state.comments.filter(x => !fresh.has(x.id)).forEach(x => onComment("DELETE", null, x));
+  // Удалённые ищем только среди тех, что были до этой проверки: только что пришедшего в списке id может ещё не быть
+  const before = state.comments.slice();
+  (cNew.data || []).forEach(x => onComment("INSERT", x));   // повторы onComment отсеет сам
+  if (cIds.data) {
+    const alive = new Set(cIds.data.map(x => x.id));
+    before.filter(x => !alive.has(x.id)).forEach(x => onComment("DELETE", null, x));
   }
   if (r.data) {
     const key = x => `${x.media_id}|${x.user_id}|${x.emoji}`;
