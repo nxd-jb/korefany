@@ -1181,6 +1181,64 @@ body.kb-open .pv-sheet { padding-bottom: 8px; }
 /* Название общего чата и группы нажимается — открывает участников */
 .ch-who[data-members] { cursor: pointer; }
 
+/* ---------- «Счёт» ---------- */
+.top-m.on { color: var(--accent); filter: drop-shadow(0 0 6px rgba(255, 79, 216, .8)); }
+.mo-new { display: grid; gap: 14px; }
+.mo-new[hidden] { display: none; }
+.mo-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.mo-trip { display: grid; gap: 10px; text-decoration: none; transition: border-color .2s, box-shadow .2s, transform .2s; animation: rise .4s ease both; }
+.mo-trip:hover { border-color: var(--accent); box-shadow: var(--glow); transform: translateY(-2px); }
+.mo-trip.closed { opacity: .65; }
+.mo-trip-top { display: flex; align-items: center; gap: 8px; }
+.mo-trip-top b { font-size: 17px; }
+.mo-avas { display: flex; }
+.mo-avas .ava { width: 28px; height: 28px; font-size: 12px; margin-right: -6px; box-shadow: 0 0 0 2px var(--panel); }
+.mo-trip-bottom { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.mo-plus { color: #3ddc84; font-weight: 700; }
+.mo-minus { color: #ff6b9a; font-weight: 700; }
+.mo-even { color: var(--muted); font-weight: 600; }
+.mo-badge { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--panel-2); color: var(--muted); vertical-align: middle; letter-spacing: 0; }
+/* Моё положение крупно: зелёным — мне должны, розовым — я должен */
+.mo-me { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.mo-me b { font-size: 28px; font-variant-numeric: tabular-nums; }
+.mo-me.plus { border-color: rgba(61, 220, 132, .5); box-shadow: 0 0 22px rgba(61, 220, 132, .15); }
+.mo-me.plus b { color: #3ddc84; }
+.mo-me.minus { border-color: rgba(255, 107, 154, .5); box-shadow: 0 0 22px rgba(255, 79, 216, .15); }
+.mo-me.minus b { color: #ff6b9a; }
+/* Кто кому переводит */
+.mo-plan { display: grid; gap: 8px; }
+.mo-pay { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); }
+.mo-pay.me { border-color: var(--accent); box-shadow: var(--glow); }
+.mo-who { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.mo-who .ava { width: 30px; height: 30px; font-size: 13px; }
+.mo-arrow { color: var(--accent-2); font-weight: 800; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mo-done { margin-left: auto; }
+/* Форма траты */
+.mo-add { display: grid; gap: 14px; }
+/* Блоки трат: у каждого своя сумма, «за что», кто платил и на кого делим */
+.mo-entries { display: grid; gap: 12px; }
+.mo-entry { display: grid; gap: 12px; animation: rise .3s ease both; }
+.mo-entry + .mo-entry { padding-top: 14px; border-top: 1px dashed var(--line); }
+.mo-entry-head { display: flex; justify-content: space-between; align-items: center; }
+.mo-entry-head b { color: var(--accent-2); font-size: 14px; text-transform: uppercase; letter-spacing: .06em; }
+/* Строка: сумма · за что · «+» */
+.mo-add-row { display: grid; grid-template-columns: 140px 1fr 44px; gap: 10px; align-items: end; animation: rise .25s ease both; }
+.mo-add-row label { display: grid; gap: 6px; }
+.mo-row-btn {
+  width: 44px; height: 44px; padding: 0; border-radius: 12px; border: 1px solid var(--line); background: var(--panel-2);
+  color: var(--muted); font-size: 18px; cursor: pointer; transition: border-color .2s, box-shadow .2s, color .2s;
+}
+.mo-row-btn.add { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-size: 24px; font-weight: 700; box-shadow: var(--glow); }
+.mo-row-btn:hover { border-color: var(--accent); color: var(--fg); }
+@media (max-width: 520px) { .mo-add-row { grid-template-columns: 96px 1fr 44px; gap: 8px; } }
+/* Список трат и возвратов */
+.mo-items { display: grid; gap: 6px; }
+.mo-item { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); }
+.mo-item-main { display: grid; min-width: 0; flex: 1; }
+.mo-item-main b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mo-item-main .msg { font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+.mo-item-side { display: grid; justify-items: end; gap: 2px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+
 /* Нижнее меню на телефоне */
 .bnav { display: none; }
 @media (max-width: 700px) {

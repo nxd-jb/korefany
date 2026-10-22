@@ -290,7 +290,8 @@ const ICONS = {
   plus: `<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>`,
   quotes: `<svg viewBox="0 0 24 24"><path d="M7 7h4v4c0 2.5-1.5 4-4 4.5M14 7h4v4c0 2.5-1.5 4-4 4.5"/></svg>`,
   chats: `<svg viewBox="0 0 24 24"><path d="M4 6h16v10H9l-5 4z"/><path d="M8 10h8M8 13h5"/></svg>`,
-  top: `<svg viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8 21h8M9.5 17h5v4h-5z"/></svg>`
+  top: `<svg viewBox="0 0 24 24"><path d="M8 4h8v5a4 4 0 0 1-8 0zM8 6H5a3 3 0 0 0 3 4M16 6h3a3 3 0 0 1-3 4M12 13v4M8 21h8M9.5 17h5v4h-5z"/></svg>`,
+  money: `<svg viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="3"/><path d="M3 10h18"/><circle cx="16.5" cy="14.5" r="1.4"/><path d="M7 6l8-3 1.5 3"/></svg>`
 };
 
 // Положение розовой подсветки активного пункта: запоминаем, чтобы на новой странице она переехала, а не появилась
@@ -311,9 +312,11 @@ function shell(active, inner) {
         <a href="#/chats" class="${active === "chats" ? "on" : ""}">${ICONS.chats}Чаты<i class="nav-badge" data-chat-badge hidden></i></a>
         ${blink("#/quotes", "Цитаты", "quotes")}
         ${blink("#/top", "Топ", "top")}
+        ${blink("#/money", "Счёт", "money")}
       </nav>
       <a href="#/upload" class="cta-up" title="Загрузить">${ICONS.plus}<span>Загрузить</span></a>
-      <a href="#/top" class="me-m top-m" title="Топ месяца">${ICONS.top}</a>
+      <a href="#/money" class="me-m top-m${active === "money" ? " on" : ""}" title="Счёт">${ICONS.money}</a>
+      <a href="#/top" class="me-m top-m${active === "top" ? " on" : ""}" title="Топ месяца">${ICONS.top}</a>
       <a href="#/me" class="me-link" title="Мой профиль">${avatar(me())}</a>
     </div></div></header>
     <main class="wrap">${inner}</main>
@@ -1806,6 +1809,8 @@ async function route() {
     else if (h === "/chats") await viewChats();
     else if (h.startsWith("/chat/")) await viewChat(h.slice(6));
     else if (h === "/top") await viewTop();
+    else if (h === "/money") await viewMoney();
+    else if (h.startsWith("/money/")) await viewMoneyTrip(h.slice(7));
     else if (h === "/upload") viewUpload();
     else if (h === "/me") await viewMe();
     else location.hash = "#/";
@@ -1816,7 +1821,7 @@ async function route() {
 }
 
 // Подходит ли страница к текущему адресу (для защиты от устаревших переходов в shell)
-const PAGE_OF = { feed: ["/"], people: ["/people", "/p/"], chats: ["/chats", "/chat/"], quotes: ["/quotes"], top: ["/top"], "": ["/me", "/upload"] };
+const PAGE_OF = { feed: ["/"], people: ["/people", "/p/"], chats: ["/chats", "/chat/"], quotes: ["/quotes"], top: ["/top"], money: ["/money"], "": ["/me", "/upload"] };
 function pageMatches(active) {
   const h = location.hash.replace(/^#/, "") || "/";
   const list = PAGE_OF[active]; if (!list) return true;
