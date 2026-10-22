@@ -1186,56 +1186,65 @@ async function openViewer(id, dir = 0, fromEl = null) {
 // ---------- Просмотр фото на телефоне (как в Инстаграме) ----------
 // Фото на весь экран листается пальцем, соседние выглядывают по краям. Сверху — кто загрузил и «3 / 24»,
 // снизу — реакции и подпись, комментарии выезжают шторкой. Смахнуть вниз — закрыть, два касания — ❤️
-async function openPhoneViewer(list, idx, fromEl = null, dir = 0) {
-  const m = list[idx], prev = list[idx - 1], next = list[idx + 1];
-  const near = [prev, m, next].filter(Boolean);
-  await signed(near.flatMap(x => [x.path, thumbPath(x), midPath(x)]));
-  // Следующие за соседними подгружаем заранее, чтобы листать без ожидания
-  signed([list[idx - 2], list[idx + 2]].filter(Boolean).flatMap(x => [x.path, thumbPath(x), midPath(x)])).catch(() => {});
+// Ссылки на файлы фото и двух соседей с каждой стороны — чтобы листать без ожидания
+const pvSign = (list, idx) => signed([-2, -1, 0, 1, 2].map(d => list[idx + d]).filter(Boolean).flatMap(x => [x.path, thumbPath(x), midPath(x)]));
+
+// Части просмотра. При листании пересобираются только подписи вокруг, а сами фото остаются на месте —
+// раньше пересоздавался весь просмотр, и экран мигал
+function pvSlide(x, cur = false) {
+  if (!x) return `<div class="pv-slide empty"></div>`;
+  return `<div class="pv-slide${cur ? " media" : ""}" data-pv-id="${x.id}" style="background-image:url('${url(thumbPath(x))}')">${
+    x.kind === "video" && cur
+      ? `<video src="${url(x.path)}" poster="${url(thumbPath(x))}" controls autoplay playsinline></video>`
+      : x.kind === "video" ? `<span class="pv-play">▶</span>`
+      : `<img class="fade" src="${url(midPath(x)) || url(x.path)}" alt="${esc(x.caption || "")}" draggable="false">`}</div>`;
+}
+function pvTop(m, list, idx) {
+  return `<button type="button" class="pv-x" data-close aria-label="Закрыть">✕</button>
+    <a class="pv-who" href="#/p/${m.owner}" style="${ucStyle(m.owner)}">${avatar(m.owner)}<b>${esc(nameOf(m.owner))}</b></a>
+    <span class="pv-count">${idx + 1} / ${list.length}</span>
+    ${m.owner === me() ? `<button type="button" class="pv-del" data-del="${m.id}" aria-label="Удалить">Удалить</button>` : ""}`;
+}
+// Точки под фото: не больше семи, текущая — вытянутая розовая
+function pvDots(list, idx) {
+  if (list.length < 2) return "";
+  const from = Math.max(0, Math.min(idx - 3, list.length - 7));
+  return list.slice(from, from + 7).map((_, i) => `<i class="${from + i === idx ? "on" : ""}"></i>`).join("");
+}
+function pvInfo(m) {
+  const cc = state.comments.filter(c => c.media_id === m.id).length;
+  return `<div class="pv-acts">${reactButtons("m", m.id)}
+      ${state.commentsReady ? `<button type="button" class="react pv-cbtn" data-pv-comments aria-label="Комментарии">💬<span class="c-count">${cc || ""}</span></button>` : ""}</div>
+    ${m.caption ? `<p class="pv-cap">${esc(m.caption)}</p>` : ""}
+    <p class="pv-meta">${dayText(m.taken_at || m.created_at)}${m.people.length ? ` · на фото ${m.people.map(p => `<a href="#/p/${p}">${esc(nameOf(p))}</a>`).join(", ")}` : ""}</p>`;
+}
+// Уже загруженные картинки показываем сразу, без проявления
+const pvShowLoaded = root => root.querySelectorAll("img.fade").forEach(i => { if (i.complete && i.naturalWidth) i.classList.add("loaded", "now"); });
+
+async function openPhoneViewer(list, idx, fromEl = null) {
+  const m = list[idx];
+  await pvSign(list, idx);
   const old = document.getElementById("viewer");
   const fresh = !old;
   old?.remove();
   state.viewing = m.id;
 
-  const pic = x => url(midPath(x)) || url(x.path);
-  const slide = (x, cur) => !x ? `<div class="pv-slide empty"></div>` :
-    `<div class="pv-slide${cur ? " media" : ""}" style="background-image:url('${url(thumbPath(x))}')">${
-      x.kind === "video" && cur
-        ? `<video src="${url(x.path)}" poster="${url(thumbPath(x))}" controls autoplay playsinline></video>`
-        : x.kind === "video" ? `<span class="pv-play">▶</span>`
-        : `<img class="fade" src="${pic(x)}" alt="${esc(x.caption || "")}" draggable="false">`}</div>`;
-  // Точки под фото: не больше семи, текущая — вытянутая розовая
-  const from = Math.max(0, Math.min(idx - 3, list.length - 7));
-  const dots = list.length > 1 ? list.slice(from, from + 7).map((_, i) => `<i class="${from + i === idx ? "on" : ""}"></i>`).join("") : "";
-  const cc = state.comments.filter(c => c.media_id === m.id).length;
-
   const el = document.createElement("div");
-  el.className = "viewer pv"; el.id = "viewer";
+  el.className = "viewer pv" + (fresh ? "" : " instant"); el.id = "viewer";
   el.innerHTML = `
-    <div class="pv-top">
-      <button type="button" class="pv-x" data-close aria-label="Закрыть">✕</button>
-      <a class="pv-who" href="#/p/${m.owner}" style="${ucStyle(m.owner)}">${avatar(m.owner)}<b>${esc(nameOf(m.owner))}</b></a>
-      <span class="pv-count">${idx + 1} / ${list.length}</span>
-      ${m.owner === me() ? `<button type="button" class="pv-del" data-del="${m.id}" aria-label="Удалить">Удалить</button>` : ""}
-    </div>
-    <div class="pv-stage"><div class="pv-track">${slide(prev)}${slide(m, true)}${slide(next)}</div></div>
-    <div class="pv-dots">${dots}</div>
-    <div class="pv-info">
-      <div class="pv-acts">${reactButtons("m", m.id)}
-        ${state.commentsReady ? `<button type="button" class="react pv-cbtn" data-pv-comments aria-label="Комментарии">💬<span class="c-count">${cc || ""}</span></button>` : ""}</div>
-      ${m.caption ? `<p class="pv-cap">${esc(m.caption)}</p>` : ""}
-      <p class="pv-meta">${dayText(m.taken_at || m.created_at)}${m.people.length ? ` · на фото ${m.people.map(p => `<a href="#/p/${p}">${esc(nameOf(p))}</a>`).join(", ")}` : ""}</p>
-    </div>
+    <div class="pv-top">${pvTop(m, list, idx)}</div>
+    <div class="pv-stage"><div class="pv-track">${pvSlide(list[idx - 1])}${pvSlide(m, true)}${pvSlide(list[idx + 1])}</div></div>
+    <div class="pv-dots">${pvDots(list, idx)}</div>
+    <div class="pv-info">${pvInfo(m)}</div>
     <div class="pv-sheet-wrap" hidden><div class="pv-dim" data-pv-close-sheet></div>
-      <div class="pv-sheet"><div class="pv-grab" data-pv-close-sheet></div>${commentsBlock(m)}</div></div>`;
+      <div class="pv-sheet"><div class="pv-grab" data-pv-close-sheet></div><div class="pv-comments">${commentsBlock(m)}</div></div></div>`;
   document.body.appendChild(el);
   document.body.classList.add("viewer-open");
-  // Уже загруженные картинки показываем сразу, без проявления — иначе при листании мигало бы
-  el.querySelectorAll("img.fade").forEach(i => { if (i.complete && i.naturalWidth) i.classList.add("loaded", "now"); });
+  pvShowLoaded(el);
   if (fresh && !history.state?.viewer) history.pushState({ viewer: true }, "");
   wireComments(el, m);
-  wirePhoneViewer(el, list, idx, m);
-  if (fromEl && !dir && m.kind === "photo") flyIn(fromEl, el);
+  wirePhoneViewer(el, list, idx);
+  if (fromEl && m.kind === "photo") flyIn(fromEl, el);
 }
 
 function openPvSheet() {
@@ -1256,9 +1265,32 @@ document.addEventListener("click", e => {
   if (e.target.closest("[data-pv-close-sheet]")) closePvSheet();
 });
 
-function wirePhoneViewer(el, list, idx, m) {
+function wirePhoneViewer(el, list, idx) {
   const stage = el.querySelector(".pv-stage"), track = el.querySelector(".pv-track");
   const has = d => !!list[idx + d];
+  // Перешли к соседнему фото: сдвигаем ленту из трёх слайдов (лишний убираем, новый сосед добавляется с другого края)
+  // и обновляем подписи. Сами картинки не пересоздаются, поэтому ничего не мигает
+  const shift = async d => {
+    const prevM = list[idx], nextM = list[idx + d];
+    // С видео проще пересобрать просмотр целиком (у текущего видео — плеер, у соседа — значок ▶)
+    if (prevM.kind === "video" || nextM.kind === "video") return openPhoneViewer(list, idx + d);
+    idx += d;
+    const m = list[idx];
+    state.viewing = m.id;
+    await pvSign(list, idx).catch(() => {});
+    if (!document.body.contains(el)) return;
+    if (d > 0) { track.firstElementChild.remove(); track.insertAdjacentHTML("beforeend", pvSlide(list[idx + 1])); }
+    else { track.lastElementChild.remove(); track.insertAdjacentHTML("afterbegin", pvSlide(list[idx - 1])); }
+    [...track.children].forEach((s, i) => s.classList.toggle("media", i === 1));
+    pvShowLoaded(track);
+    setX(0, false);
+    el.querySelector(".pv-top").innerHTML = pvTop(m, list, idx);
+    el.querySelector(".pv-dots").innerHTML = pvDots(list, idx);
+    el.querySelector(".pv-info").innerHTML = pvInfo(m);
+    el.querySelector(".pv-comments").innerHTML = commentsBlock(m);
+    wireComments(el, m);
+    busy = false;
+  };
   let sx = 0, sy = 0, st = 0, dx = 0, dy = 0, axis = null, lastTap = 0, busy = false;
   const base = () => -(track.querySelector(".pv-slide").offsetWidth + 8);   // сдвиг, при котором по центру текущее фото
   const setX = (x, anim) => { track.style.transition = anim ? "transform .3s cubic-bezier(.2, .9, .25, 1)" : "none"; track.style.transform = `translateX(${base() + x}px)`; };
@@ -1290,9 +1322,10 @@ function wirePhoneViewer(el, list, idx, m) {
       const d = dx < 0 ? 1 : -1, fast = Math.abs(dx) / dt > .5;
       if (has(d) && (Math.abs(dx) > w * .22 || fast)) {
         busy = true;
+        // Новое фото разгорается до полной яркости, пока едет к центру, а старое тускнеет
+        [...track.children].forEach((s, i) => s.classList.toggle("media", i === 1 + d));
         setX(-d * (track.querySelector(".pv-slide").offsetWidth + 8), true);
-        // Долистали — пересобираем просмотр вокруг нового фото (на экране ничего не дёргается)
-        setTimeout(() => openPhoneViewer(list, idx + d, null, d), 300);
+        setTimeout(() => shift(d), 300);
       } else setX(0, true);
     } else if (axis === "y") {
       if (dy > 110 || (dy > 40 && dy / dt > .6)) {

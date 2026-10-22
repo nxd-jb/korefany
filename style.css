@@ -1055,7 +1055,9 @@ body.viewer-open { overflow: hidden; }
   background: center / contain no-repeat; border-radius: 12px;
 }
 .pv-slide:has(img.loaded), .pv-slide.empty { background-image: none !important; }
+.pv-slide { transition: opacity .3s ease; }
 .pv-slide:not(.media) { opacity: .5; }
+.viewer.pv.instant { animation: none; }   /* пересборка просмотра (для видео) без повторного проявления */
 .viewer.pv .media img, .viewer.pv .media video, .pv-slide img {
   max-width: 100%; max-height: 100%; border-radius: 12px; box-shadow: none; animation: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
