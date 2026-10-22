@@ -650,7 +650,6 @@ body.in-chat { padding-bottom: 0; }
   background: linear-gradient(135deg, #d63ab4, #8a3cff); box-shadow: 0 0 16px rgba(255, 79, 216, .25);
 }
 .msg.mine.run .bubble { border-radius: 18px 6px 6px 18px; }
-.msg.active .bubble { box-shadow: 0 0 0 2px var(--accent-2), var(--glow-2); }
 .m-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.4; }
 .m-text a { color: var(--accent-2); }
 .msg.mine .m-text a { color: #dffbff; }
@@ -671,38 +670,50 @@ body.in-chat { padding-bottom: 0; }
 .m-react[aria-pressed="true"] { border-color: var(--accent); background: rgba(255, 79, 216, .18); box-shadow: 0 0 10px rgba(255, 79, 216, .4); }
 .m-react.pop { animation: pop .35s ease; }
 
-/* Меню действий над сообщением */
-.m-actions {
-  display: none; position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 5;
-  gap: 2px; padding: 4px; border-radius: 999px; background: rgba(21, 17, 31, .97); border: 1px solid var(--accent); box-shadow: var(--glow);
-  white-space: nowrap;
-}
-.msg.mine .m-actions { left: auto; right: 0; }
-.msg.active .m-actions { display: flex; animation: pop-in .25s cubic-bezier(.2, 1.4, .4, 1) both; }
-.m-actions button { border: 0; background: none; border-radius: 999px; padding: 4px 8px; cursor: pointer; font-size: 18px; }
-.m-actions button[data-mact="reply"], .m-actions button[data-mact="del"], .m-actions button[data-mact="copy"] { font-size: 13px; font-weight: 700; }
-.m-actions button:hover { background: var(--panel-2); }
-.m-actions .danger { color: var(--danger); }
 
-/* Веер реакций: меню раскрывается пружинкой, эмодзи выскакивают по очереди */
-.m-actions { flex-wrap: wrap; justify-content: center; width: max-content; max-width: min(310px, 88vw); border-radius: 22px; padding: 6px; }
-.msg.active .m-actions { animation: fan-open .32s cubic-bezier(.2, 1.5, .4, 1) both; transform-origin: bottom left; }
-.msg.mine.active .m-actions { transform-origin: bottom right; }
-.msg.below.active .m-actions { transform-origin: top left; }
-.msg.active .m-actions button { animation: fan-item .4s cubic-bezier(.2, 1.7, .4, 1) both; }
-.msg.active .m-actions button:nth-child(1) { animation-delay: .04s; }
-.msg.active .m-actions button:nth-child(2) { animation-delay: .08s; }
-.msg.active .m-actions button:nth-child(3) { animation-delay: .12s; }
-.msg.active .m-actions button:nth-child(n+4) { animation-delay: .16s; }
-.m-actions button[data-mact="react"] { font-size: 24px; padding: 2px 6px; transition: transform .15s; }
-.m-actions button[data-mact="react"]:active { transform: scale(1.35); }
-@keyframes fan-open { from { opacity: 0; transform: scale(.4); } }
-@keyframes fan-item { from { opacity: 0; transform: translateY(10px) scale(.3); } }
+/* ---------- Меню сообщения (как в iMessage / Telegram) ----------
+   Над пузырём — плашка реакций, под ним — аккуратный список действий со значками.
+   .below — у верхних сообщений всё уходит вниз, .up — у нижних всё поднимается вверх */
+.m-pick, .m-menu {
+  display: none; position: absolute; z-index: 7; left: 0;
+  background: rgba(30, 24, 43, .97); border: 1px solid rgba(255, 255, 255, .09);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .55), 0 0 0 1px rgba(0, 0, 0, .3);
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+}
+.msg.mine .m-pick, .msg.mine .m-menu { left: auto; right: 0; }
+.m-pick { bottom: calc(100% + 8px); padding: 5px 6px; gap: 2px; border-radius: 999px; transform-origin: bottom left; }
+.m-menu { top: calc(100% + 8px); width: 196px; padding: 5px; border-radius: 16px; transform-origin: top left; }
+.msg.mine .m-pick { transform-origin: bottom right; }
+.msg.mine .m-menu { transform-origin: top right; }
+.msg.below .m-pick { bottom: auto; top: calc(100% + 8px); transform-origin: top left; }
+.msg.below .m-menu { top: calc(100% + 66px); }
+.msg.up .m-menu { top: auto; bottom: calc(100% + 66px); transform-origin: bottom left; }
+.msg.mine.up .m-menu { transform-origin: bottom right; }
+.msg.active .m-pick { display: flex; animation: fan-open .34s cubic-bezier(.2, 1.5, .4, 1) both; }
+.msg.active .m-menu { display: grid; animation: fan-open .3s cubic-bezier(.2, 1.3, .4, 1) .04s both; }
+/* Реакции выскакивают по очереди, при нажатии подпрыгивают */
+.m-pick button { border: 0; background: none; cursor: pointer; font-size: 27px; line-height: 1; padding: 5px 6px; border-radius: 50%; transition: transform .15s, background .15s; }
+.m-pick button:hover { background: rgba(255, 255, 255, .08); transform: scale(1.15); }
+.m-pick button:active { transform: scale(1.4); }
+.msg.active .m-pick button { animation: fan-item .42s cubic-bezier(.2, 1.7, .4, 1) both; }
+.msg.active .m-pick button:nth-child(2) { animation-delay: .05s; }
+.msg.active .m-pick button:nth-child(3) { animation-delay: .1s; }
+/* Список действий: строка — значок и подпись */
+.m-menu button {
+  display: flex; align-items: center; gap: 12px; width: 100%; height: 42px; padding: 0 12px; border: 0; border-radius: 11px;
+  background: none; color: var(--fg); font-size: 15px; font-weight: 500; text-align: left; cursor: pointer;
+}
+.m-menu button + button { box-shadow: 0 -1px 0 rgba(255, 255, 255, .06); }
+.m-menu button:hover, .m-menu button:active { background: rgba(255, 255, 255, .07); box-shadow: none; }
+.m-menu svg { width: 19px; height: 19px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.9; stroke-linecap: round; stroke-linejoin: round; opacity: .85; }
+.m-menu .danger { color: #ff6b7f; }
+@keyframes fan-open { from { opacity: 0; transform: scale(.5); } }
+@keyframes fan-item { from { opacity: 0; transform: translateY(8px) scale(.3); } }
 /* Пока меню открыто, остальные сообщения приглушены, а выбранное чуть приподнято */
 .msgs-in .msg { transition: opacity .25s; }
-.msgs.has-active .msgs-in .msg:not(.active) { opacity: .3; }
+.msgs.has-active .msgs-in .msg:not(.active) { opacity: .25; }
 .msgs-in .msg.active { z-index: 6; }
-.msgs-in .msg.active .bubble { transform: scale(1.03); transition: transform .2s cubic-bezier(.2, 1.4, .4, 1); }
+.msgs-in .msg.active .bubble { transform: scale(1.02); box-shadow: 0 10px 30px rgba(0, 0, 0, .5); transition: transform .2s cubic-bezier(.2, 1.4, .4, 1); }
 /* Долгое нажатие открывает меню, а не выделение текста и не системное меню iPhone */
 .msgs-in .bubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 
@@ -813,7 +824,6 @@ body.viewer-open { overflow: hidden; }
 }
 
 /* Меню у самого верхнего сообщения открывается вниз */
-.msg.below .m-actions { bottom: auto; top: calc(100% + 6px); }
 
 /* «Миша печатает...» с прыгающими точками */
 .ch-who span.typing { color: var(--accent-2); }
@@ -1022,6 +1032,62 @@ body.viewer-open { overflow: hidden; }
 .viewer .nav-btn { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2; }
 .viewer .prev { left: 16px; } .viewer .next { right: 336px; }
 .viewer .caption { font-size: 17px; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------- Просмотр фото на телефоне (как в Инстаграме) ---------- */
+.viewer.pv {
+  display: flex; flex-direction: column; height: 100dvh; backdrop-filter: none; -webkit-backdrop-filter: none;
+  background: rgba(7, 5, 12, var(--pv-fade, 1));
+}
+.viewer.pv .viewer-bg { display: none; }
+.pv-top, .pv-info, .pv-dots { opacity: var(--pv-fade, 1); }
+.pv-top { display: flex; align-items: center; gap: 10px; padding: calc(env(safe-area-inset-top, 0px) + 8px) 12px 8px; position: relative; z-index: 3; }
+.pv-x { flex: none; width: 38px; height: 38px; border-radius: 50%; border: 0; background: rgba(255, 255, 255, .1); color: #fff; font-size: 17px; cursor: pointer; padding: 0; }
+.pv-who { display: flex; align-items: center; gap: 8px; min-width: 0; text-decoration: none; font-size: 15px; }
+.pv-who .ava { width: 30px; height: 30px; box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--uc, var(--accent)); }
+.pv-who b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-count { margin-left: auto; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pv-del { border: 0; background: none; color: #ff6b7f; font-size: 13px; font-weight: 600; padding: 6px 4px; cursor: pointer; white-space: nowrap; }
+/* Лента из трёх фото: предыдущее, текущее, следующее. Соседние выглядывают по краям */
+.pv-stage { flex: 1; min-height: 0; overflow: hidden; touch-action: none; transform-origin: 50% 30%; }
+.pv-track { display: flex; gap: 8px; height: 100%; padding-left: 6vw; will-change: transform; }
+.viewer.pv .pv-slide {
+  flex: 0 0 88vw; height: 100%; padding: 0; position: relative; display: grid; place-items: center; overflow: visible;
+  background: center / contain no-repeat; border-radius: 12px;
+}
+.pv-slide:has(img.loaded), .pv-slide.empty { background-image: none !important; }
+.pv-slide:not(.media) { opacity: .5; }
+.viewer.pv .media img, .viewer.pv .media video, .pv-slide img {
+  max-width: 100%; max-height: 100%; border-radius: 12px; box-shadow: none; animation: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+}
+.pv-play { font-size: 40px; color: #fff; text-shadow: 0 0 20px rgba(0, 0, 0, .8); }
+img.fade.now { transition: none; }
+.pv-dots { display: flex; justify-content: center; gap: 5px; padding: 10px 0 2px; min-height: 17px; }
+.pv-dots i { width: 6px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .3); transition: width .25s, background .25s; }
+.pv-dots i.on { width: 16px; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.pv-info { display: grid; gap: 6px; padding: 6px 16px calc(14px + env(safe-area-inset-bottom, 0px)); }
+.pv-acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pv-acts .reacts { margin: 0; }
+.pv-cbtn { margin-left: auto; }
+.pv-cap { margin: 0; font-size: 15px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.pv-meta { margin: 0; font-size: 13px; color: var(--muted); }
+.pv-meta a { color: var(--fg); text-decoration: none; font-weight: 600; }
+/* Комментарии шторкой снизу; прибита к видимой части экрана, поэтому клавиатура её не закрывает */
+.pv-sheet-wrap { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); height: var(--vvh, 100dvh); z-index: 6; display: flex; flex-direction: column; justify-content: flex-end; }
+.pv-dim { position: absolute; inset: 0; background: rgba(0, 0, 0, .55); opacity: 0; transition: opacity .28s; }
+.pv-sheet {
+  position: relative; display: flex; flex-direction: column; max-height: 78%; min-height: 40%;
+  background: var(--panel); border-radius: 20px 20px 0 0; border-top: 1px solid var(--line);
+  padding: 0 16px calc(10px + env(safe-area-inset-bottom, 0px));
+  transform: translateY(100%); transition: transform .3s cubic-bezier(.2, .9, .25, 1);
+}
+.pv-sheet-wrap.open .pv-dim { opacity: 1; }
+.pv-sheet-wrap.open .pv-sheet { transform: none; }
+body.kb-open .pv-sheet { padding-bottom: 8px; }
+.pv-grab { flex: none; height: 22px; display: grid; place-items: center; cursor: pointer; }
+.pv-grab::before { content: ""; width: 40px; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, .25); }
+.pv-sheet .comments { display: flex; flex-direction: column; min-height: 0; flex: 1; border: 0; padding: 0; margin: 0; }
+.pv-sheet .c-list { flex: 1; min-height: 60px; overflow-y: auto; overscroll-behavior: contain; }
+.pv-sheet .c-form { position: static; padding: 8px 0 0; background: none; }
 
 /* Нижнее меню на телефоне */
 .bnav { display: none; }

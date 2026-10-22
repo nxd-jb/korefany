@@ -1136,6 +1136,8 @@ async function openViewer(id, dir = 0, fromEl = null) {
   if (!list.some(m => m.id === id)) list = state.media;
   const idx = list.findIndex(m => m.id === id);
   const m = list[idx]; if (!m) return;
+  // На телефоне — свой просмотр, как в Инстаграме (ниже, openPhoneViewer)
+  if (matchMedia("(max-width: 700px)").matches) return openPhoneViewer(list, idx, fromEl, dir);
   await signed([m.path, thumbPath(m)]);
   document.getElementById("viewer")?.remove();   // листаем: старый просмотр убираем без шага «назад»
   state.viewing = m.id;
@@ -1181,6 +1183,137 @@ async function openViewer(id, dir = 0, fromEl = null) {
     } else if (dy > 90 && Math.abs(dy) > Math.abs(dx)) closeViewer();
   });
 }
+// ---------- Просмотр фото на телефоне (как в Инстаграме) ----------
+// Фото на весь экран листается пальцем, соседние выглядывают по краям. Сверху — кто загрузил и «3 / 24»,
+// снизу — реакции и подпись, комментарии выезжают шторкой. Смахнуть вниз — закрыть, два касания — ❤️
+async function openPhoneViewer(list, idx, fromEl = null, dir = 0) {
+  const m = list[idx], prev = list[idx - 1], next = list[idx + 1];
+  const near = [prev, m, next].filter(Boolean);
+  await signed(near.flatMap(x => [x.path, thumbPath(x), midPath(x)]));
+  // Следующие за соседними подгружаем заранее, чтобы листать без ожидания
+  signed([list[idx - 2], list[idx + 2]].filter(Boolean).flatMap(x => [x.path, thumbPath(x), midPath(x)]));
+  const old = document.getElementById("viewer");
+  const fresh = !old;
+  old?.remove();
+  state.viewing = m.id;
+
+  const pic = x => url(midPath(x)) || url(x.path);
+  const slide = (x, cur) => !x ? `<div class="pv-slide empty"></div>` :
+    `<div class="pv-slide${cur ? " media" : ""}" style="background-image:url('${url(thumbPath(x))}')">${
+      x.kind === "video" && cur
+        ? `<video src="${url(x.path)}" poster="${url(thumbPath(x))}" controls autoplay playsinline></video>`
+        : x.kind === "video" ? `<span class="pv-play">▶</span>`
+        : `<img class="fade" src="${pic(x)}" alt="${esc(x.caption || "")}" draggable="false">`}</div>`;
+  // Точки под фото: не больше семи, текущая — вытянутая розовая
+  const from = Math.max(0, Math.min(idx - 3, list.length - 7));
+  const dots = list.length > 1 ? list.slice(from, from + 7).map((_, i) => `<i class="${from + i === idx ? "on" : ""}"></i>`).join("") : "";
+  const cc = state.comments.filter(c => c.media_id === m.id).length;
+
+  const el = document.createElement("div");
+  el.className = "viewer pv"; el.id = "viewer";
+  el.innerHTML = `
+    <div class="pv-top">
+      <button type="button" class="pv-x" data-close aria-label="Закрыть">✕</button>
+      <a class="pv-who" href="#/p/${m.owner}" style="${ucStyle(m.owner)}">${avatar(m.owner)}<b>${esc(nameOf(m.owner))}</b></a>
+      <span class="pv-count">${idx + 1} / ${list.length}</span>
+      ${m.owner === me() ? `<button type="button" class="pv-del" data-del="${m.id}" aria-label="Удалить">Удалить</button>` : ""}
+    </div>
+    <div class="pv-stage"><div class="pv-track">${slide(prev)}${slide(m, true)}${slide(next)}</div></div>
+    <div class="pv-dots">${dots}</div>
+    <div class="pv-info">
+      <div class="pv-acts">${reactButtons("m", m.id)}
+        ${state.commentsReady ? `<button type="button" class="react pv-cbtn" data-pv-comments aria-label="Комментарии">💬<span class="c-count">${cc || ""}</span></button>` : ""}</div>
+      ${m.caption ? `<p class="pv-cap">${esc(m.caption)}</p>` : ""}
+      <p class="pv-meta">${dayText(m.taken_at || m.created_at)}${m.people.length ? ` · на фото ${m.people.map(p => `<a href="#/p/${p}">${esc(nameOf(p))}</a>`).join(", ")}` : ""}</p>
+    </div>
+    <div class="pv-sheet-wrap" hidden><div class="pv-dim" data-pv-close-sheet></div>
+      <div class="pv-sheet"><div class="pv-grab" data-pv-close-sheet></div>${commentsBlock(m)}</div></div>`;
+  document.body.appendChild(el);
+  document.body.classList.add("viewer-open");
+  // Уже загруженные картинки показываем сразу, без проявления — иначе при листании мигало бы
+  el.querySelectorAll("img.fade").forEach(i => { if (i.complete && i.naturalWidth) i.classList.add("loaded", "now"); });
+  if (fresh && !history.state?.viewer) history.pushState({ viewer: true }, "");
+  wireComments(el, m);
+  wirePhoneViewer(el, list, idx, m);
+  if (fromEl && !dir && m.kind === "photo") flyIn(fromEl, el);
+}
+
+function openPvSheet() {
+  const w = document.querySelector(".viewer .pv-sheet-wrap"); if (!w) return false;
+  w.hidden = false;
+  requestAnimationFrame(() => w.classList.add("open"));
+  return true;
+}
+function closePvSheet() {
+  const w = document.querySelector(".viewer .pv-sheet-wrap"); if (!w || w.hidden) return;
+  w.classList.remove("open");
+  document.activeElement?.blur?.();
+  setTimeout(() => { w.hidden = true; }, 280);
+}
+document.addEventListener("click", e => {
+  if (e.target.closest("[data-pv-comments]")) openPvSheet();
+  if (e.target.closest("[data-pv-close-sheet]")) closePvSheet();
+});
+
+function wirePhoneViewer(el, list, idx, m) {
+  const stage = el.querySelector(".pv-stage"), track = el.querySelector(".pv-track");
+  const has = d => !!list[idx + d];
+  let sx = 0, sy = 0, st = 0, dx = 0, dy = 0, axis = null, lastTap = 0, busy = false;
+  const base = () => -(track.querySelector(".pv-slide").offsetWidth + 8);   // сдвиг, при котором по центру текущее фото
+  const setX = (x, anim) => { track.style.transition = anim ? "transform .3s cubic-bezier(.2, .9, .25, 1)" : "none"; track.style.transform = `translateX(${base() + x}px)`; };
+  const setY = (y, anim) => {
+    const t = anim ? "transform .3s cubic-bezier(.2, .9, .25, 1), opacity .3s" : "none";
+    stage.style.transition = t; stage.style.transform = y ? `translateY(${y}px) scale(${1 - Math.min(y, 400) / 1600})` : "";
+    el.style.setProperty("--pv-fade", Math.max(0, 1 - y / 350));
+  };
+  setX(0, false);
+
+  stage.addEventListener("touchstart", e => {
+    if (busy || e.touches.length > 1) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; st = Date.now(); dx = dy = 0; axis = null;
+  }, { passive: true });
+  stage.addEventListener("touchmove", e => {
+    if (busy || e.touches.length > 1) return;
+    dx = e.touches[0].clientX - sx; dy = e.touches[0].clientY - sy;
+    if (!axis && Math.hypot(dx, dy) > 8) axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+    if (axis === "x") {
+      // У края списка фото тянется туго — понятно, что дальше ничего нет
+      const edge = (dx > 0 && !has(-1)) || (dx < 0 && !has(1));
+      setX(edge ? dx * .3 : dx, false);
+    } else if (axis === "y" && dy > 0) setY(dy, false);
+  }, { passive: true });
+  stage.addEventListener("touchend", e => {
+    if (busy) return;
+    const dt = Date.now() - st, w = stage.offsetWidth;
+    if (axis === "x") {
+      const d = dx < 0 ? 1 : -1, fast = Math.abs(dx) / dt > .5;
+      if (has(d) && (Math.abs(dx) > w * .22 || fast)) {
+        busy = true;
+        setX(-d * (track.querySelector(".pv-slide").offsetWidth + 8), true);
+        // Долистали — пересобираем просмотр вокруг нового фото (на экране ничего не дёргается)
+        setTimeout(() => openPhoneViewer(list, idx + d, null, d), 300);
+      } else setX(0, true);
+    } else if (axis === "y") {
+      if (dy > 110 || (dy > 40 && dy / dt > .6)) {
+        busy = true;
+        setY(innerHeight, true);
+        setTimeout(() => closeViewer(), 260);
+      } else setY(0, true);
+    } else if (dt < 250) {
+      // Касание без движения: два быстрых — ❤️ с большим сердцем
+      const now = Date.now();
+      if (now - lastTap < 300) {
+        lastTap = 0;
+        const cur = el.querySelector(".pv-slide.media"), heart = document.createElement("span");
+        heart.className = "big-heart"; heart.textContent = "❤️";
+        cur.appendChild(heart); setTimeout(() => heart.remove(), 1000);
+        const btn = el.querySelector('.pv-acts [data-react="m"][data-emoji="heart"]');
+        if (btn && btn.getAttribute("aria-pressed") !== "true") toggleReact(btn);
+      } else lastTap = now;
+    }
+  });
+}
+
 // Фото вылетает из плитки и плавно вырастает до полного размера.
 // Летит копия уже загруженной маленькой картинки; настоящее фото показывается, когда она долетела и само загрузилось
 function flyIn(src, viewer) {
@@ -1189,7 +1322,7 @@ function flyIn(src, viewer) {
   if (!img || !s.width || !src.naturalWidth || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const pad = parseFloat(getComputedStyle(media).paddingLeft) || 0, mb = media.getBoundingClientRect();
   const a = src.naturalWidth / src.naturalHeight;
-  const maxH = parseFloat(getComputedStyle(img).maxHeight) || innerHeight;
+  const mh = getComputedStyle(img).maxHeight, maxH = mh.endsWith("px") ? parseFloat(mh) : innerHeight;
   // Фото встаёт по центру своей области (тот же расчёт, что делает CSS: не шире области и не выше max-height)
   const boxH = Math.min(maxH, mb.height - pad * 2);
   const w = Math.min(mb.width - pad * 2, boxH * a), h = w / a;
@@ -1298,7 +1431,7 @@ function commentsBlock(m) {
 function wireComments(el, m) {
   const form = el.querySelector(".c-form"); if (!form) return;
   const ta = form.querySelector("textarea"), send = form.querySelector(".c-send");
-  const listEl = el.querySelector(".c-list"), countEl = el.querySelector(".c-count");
+  const listEl = el.querySelector(".c-list");
   // Поле растёт вместе с текстом
   ta.oninput = () => { autoGrow(ta); send.disabled = !ta.value.trim(); };
   // Enter отправляет, Shift+Enter — новая строка. На телефоне Enter — просто новая строка, отправка кнопкой
@@ -1316,7 +1449,7 @@ function wireComments(el, m) {
     state.comments.push(data);
     listEl.querySelector(".c-empty")?.remove();
     listEl.insertAdjacentHTML("beforeend", commentHtml(data, m, 0, true));
-    countEl.textContent = state.comments.filter(c => c.media_id === m.id).length;
+    paintCommentCount(m.id);
     listEl.lastElementChild.scrollIntoView({ behavior: "smooth", block: "nearest" });
     refreshPost(m.id);
   };
@@ -1333,9 +1466,7 @@ async function deleteComment(btn) {
   const item = btn.closest(".c-item");
   item.classList.add("bye");
   setTimeout(() => item.remove(), 280);
-  const countEl = document.querySelector(".viewer .c-count");
-  if (countEl && c) countEl.textContent = state.comments.filter(x => x.media_id === c.media_id).length || "";
-  if (c) refreshPost(c.media_id);
+  if (c) { paintCommentCount(c.media_id); refreshPost(c.media_id); }
 }
 
 document.addEventListener("click", async e => {
@@ -1349,7 +1480,9 @@ document.addEventListener("click", async e => {
   const pc = e.target.closest("[data-post-comment]");
   if (pc) {   // «Написать комментарий» или «Все комментарии» — открываем фото и сразу ставим курсор в поле
     await openViewer(pc.dataset.postComment);
-    document.querySelector(".viewer .c-form textarea")?.focus();
+    // На телефоне комментарии в шторке — сначала открываем её
+    if (openPvSheet()) setTimeout(() => document.querySelector(".viewer .c-form textarea")?.focus(), 320);
+    else document.querySelector(".viewer .c-form textarea")?.focus();
     return;
   }
   const open = e.target.closest("[data-open]"); if (open) return openViewer(open.dataset.open, 0, open.querySelector("img"));
@@ -1752,8 +1885,9 @@ function onComment(type, n, o) {
 
 function paintCommentCount(mediaId) {
   if (state.viewing !== mediaId) return;
-  const el = document.querySelector(".viewer .c-count");
-  if (el) el.textContent = state.comments.filter(c => c.media_id === mediaId).length || "";
+  // Счётчиков может быть два: у заголовка комментариев и на кнопке 💬 в просмотре на телефоне
+  const n = state.comments.filter(c => c.media_id === mediaId).length;
+  document.querySelectorAll(".viewer .c-count").forEach(el => { el.textContent = n || ""; });
 }
 
 // Пришла новая или снятая реакция

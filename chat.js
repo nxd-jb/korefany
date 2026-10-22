@@ -381,6 +381,14 @@ function isJumbo(text) {
   return parts.length <= 3 && parts.every(p => /\p{Extended_Pictographic}/u.test(p));
 }
 
+// Значки для меню сообщения
+const MENU_ICONS = {
+  reply: `<svg viewBox="0 0 24 24"><path d="M10 6L4 12l6 6"/><path d="M4 12h10a6 6 0 0 1 6 6v1"/></svg>`,
+  copy: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`,
+  pin: `<svg viewBox="0 0 24 24"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6"/></svg>`,
+  del: `<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>`
+};
+
 // Живые эмодзи: у каждого крупного эмодзи своя анимация — 🔥 горит, ❤️ бьётся, 😂 трясётся от смеха, остальные покачиваются
 const LIVE_EMOJI = [
   [/🔥|💥|⚡/u, "fire"],
@@ -427,12 +435,13 @@ function msgHtml(m, prev, c, isNew = false, next = null) {
           : `<span class="m-meta m-meta-block">${meta}</span>`}
       </div>
       <div class="m-reacts" data-mreacts="${m.id}">${msgReactsHtml(m.id)}</div>
-      <div class="m-actions">
-        ${Object.entries(EMOJI).map(([k, e]) => `<button type="button" data-mact="react" data-emoji="${k}" aria-label="Реакция">${e}</button>`).join("")}
-        <button type="button" data-mact="reply">Ответить</button>
-        ${m.text ? `<button type="button" data-mact="copy">Копировать</button>` : ""}
-        <button type="button" data-mact="pin" title="Закрепить вверху чата">📌</button>
-        ${mine ? `<button type="button" data-mact="del" class="danger">Удалить</button>` : ""}
+      <div class="m-pick">${Object.entries(EMOJI).map(([k, e]) =>
+        `<button type="button" data-mact="react" data-emoji="${k}" aria-label="Реакция">${e}</button>`).join("")}</div>
+      <div class="m-menu">
+        <button type="button" data-mact="reply">${MENU_ICONS.reply}Ответить</button>
+        ${m.text ? `<button type="button" data-mact="copy">${MENU_ICONS.copy}Копировать</button>` : ""}
+        <button type="button" data-mact="pin">${MENU_ICONS.pin}${c.pinned_message === m.id ? "Открепить" : "Закрепить"}</button>
+        ${mine ? `<button type="button" data-mact="del" class="danger">${MENU_ICONS.del}Удалить</button>` : ""}
       </div>
     </div>
   </div>`;
@@ -1076,8 +1085,14 @@ document.addEventListener("click", async e => {
 // Меню сообщения: веер реакций, «Ответить», «Копировать»... toggle — нажатие ещё раз закрывает
 function openMsgMenu(bubble, toggle = false) {
   const msg = bubble.closest(".msg"), box = document.getElementById("msgs");
-  // У самого верхнего сообщения меню не помещается сверху — показываем его снизу
-  msg.classList.toggle("below", bubble.getBoundingClientRect().top - box.getBoundingClientRect().top < 64);
+  // Обычно реакции над сообщением, а список действий под ним. Если места не хватает —
+  // у верхних сообщений всё уходит вниз (below), у нижних — вверх (up)
+  const b = bubble.getBoundingClientRect(), r = box.getBoundingClientRect();
+  const menuH = (msg.querySelectorAll(".m-menu button").length * 44) + 16, pickH = 58;
+  const above = b.top - r.top, under = r.bottom - b.bottom;
+  const place = above >= pickH && under >= menuH ? "" : under >= menuH + pickH ? "below" : "up";
+  msg.classList.toggle("below", place === "below");
+  msg.classList.toggle("up", place === "up");
   if (toggle) msg.classList.toggle("active"); else msg.classList.add("active");
   syncActive();
 }
