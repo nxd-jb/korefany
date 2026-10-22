@@ -363,7 +363,7 @@ async function grid(list, emptyHtml, square = false) {
     const rc = rcOf.get(m.id) || 0;
     const cc = ccOf.get(m.id) || 0;
     return `<button type="button" class="tile" style="--i:${Math.min(i, 20)}" data-open="${m.id}" aria-label="${esc(m.caption || "Открыть")}">
-      ${t ? `<img src="${t}" alt="" loading="lazy">` : `<span class="noimg">${m.kind === "video" ? "▶" : "🖼"}</span>`}
+      ${t ? `<img class="fade" src="${t}" alt="" loading="lazy" decoding="async">` : `<span class="noimg">${m.kind === "video" ? "▶" : "🖼"}</span>`}
       ${m.kind === "video" ? `<span class="play">▶ видео</span>` : ""}
       ${rc || cc ? `<span class="rc">${rc ? `🔥 ${rc}` : ""}${rc && cc ? " · " : ""}${cc ? `💬 ${cc}` : ""}</span>` : ""}
     </button>`;
@@ -441,7 +441,7 @@ function postHtml(m, i = 0) {
     </header>
     <div class="post-media" data-post-media="${m.id}">${m.kind === "video"
       ? `<video src="${url(m.path)}" poster="${url(thumbPath(m))}" controls playsinline preload="none"></video>`
-      : `<img src="${url(midPath(m)) || url(m.path)}" alt="${esc(m.caption || "")}" loading="lazy" decoding="async">`}</div>
+      : postPicture(m)}</div>
     <div class="post-body">
       <div class="post-actions">
         ${reactButtons("m", m.id)}
@@ -453,6 +453,17 @@ function postHtml(m, i = 0) {
     </div>
   </article>`;
 }
+
+// Фото в посте проявляется: сначала видно размытое маленькое превью (оно лёгкое и грузится мгновенно),
+// поверх него плавно проступает чёткое фото, когда загрузится
+function postPicture(m) {
+  const t = url(thumbPath(m)), src = url(midPath(m)) || url(m.path), alt = esc(m.caption || "");
+  if (!t) return `<img class="full" src="${src}" alt="${alt}" loading="lazy" decoding="async">`;
+  return `<img class="ph" src="${t}" alt="" aria-hidden="true" loading="lazy">` +
+    `<img class="full fade" src="${src}" alt="${alt}" loading="lazy" decoding="async">`;
+}
+// Картинка с классом fade загрузилась — показываем её (одно правило на весь сайт)
+document.addEventListener("load", e => { if (e.target.classList?.contains("fade")) e.target.classList.add("loaded"); }, true);
 
 // Под постом — два последних комментария и ссылка на остальные
 function commentsPreview(m) {
@@ -488,7 +499,7 @@ function postMediaClick(el, e) {
     return;
   }
   clearTimeout(postTap.timer);
-  postTap = { id, timer: setTimeout(() => { postTap = { id: null, timer: null }; openViewer(id); }, 260) };
+  postTap = { id, timer: setTimeout(() => { postTap = { id: null, timer: null }; openViewer(id, 0, el.querySelector("img.full.loaded, img.full:not(.fade)") || el.querySelector("img.ph")); }, 260) };
 }
 
 // Обложка ленты: случайные фото сменяют друг друга, плюс счётчики.
@@ -509,7 +520,7 @@ async function coverHtml() {
   return `<section class="cover" id="cover">
     ${slides.map((m, i) => `<div class="cover-slide${i === 0 ? " on" : ""}" data-cover-open="${m.id}">
       <img class="cs-bg" src="${url(thumbPath(m)) || url(m.path)}" alt="">
-      <img class="cs-fg" ${i < 2 ? "src" : "data-src"}="${url(midPath(m)) || url(m.path)}" alt="" decoding="async">
+      <img class="cs-fg fade" ${i < 2 ? "src" : "data-src"}="${url(midPath(m)) || url(m.path)}" alt="" decoding="async">
     </div>`).join("")}
     ${slides.length > 1 ? `<div class="cover-dots">${slides.map((_, i) => `<i class="${i === 0 ? "on" : ""}"></i>`).join("")}</div>` : ""}
     <div class="cover-in">
@@ -562,7 +573,7 @@ function startCover() {
   cover.addEventListener("click", e => {
     if (Math.abs(e.clientX - sx) > 10 && sx) return;   // это был свайп, а не нажатие
     const id = slides[cur].dataset.coverOpen;
-    if (id) openViewer(id);
+    if (id) openViewer(id, 0, slides[cur].querySelector(".cs-fg"));
   });
   restart();
 }
@@ -1118,8 +1129,9 @@ function viewLogin() {
 
 // ---------- Просмотр одного файла ----------
 
-// dir: -1 пришли свайпом назад, 1 вперёд, 0 просто открыли
-async function openViewer(id, dir = 0) {
+// dir: -1 пришли свайпом назад, 1 вперёд, 0 просто открыли.
+// fromEl — картинка, на которую нажали (плитка, пост, обложка): фото «вырастет» из неё
+async function openViewer(id, dir = 0, fromEl = null) {
   let list = state.current || state.media;
   if (!list.some(m => m.id === id)) list = state.media;
   const idx = list.findIndex(m => m.id === id);
@@ -1155,6 +1167,7 @@ async function openViewer(id, dir = 0) {
   if (fresh && !history.state?.viewer) history.pushState({ viewer: true }, "");
   wireComments(el, m);
   wireDoubleTap(el, m);
+  if (fromEl && !dir && m.kind === "photo") flyIn(fromEl, el);
 
   // Свайпы на телефоне: влево — следующее, вправо — предыдущее, вниз — закрыть
   const media = el.querySelector(".media");
@@ -1168,6 +1181,34 @@ async function openViewer(id, dir = 0) {
     } else if (dy > 90 && Math.abs(dy) > Math.abs(dx)) closeViewer();
   });
 }
+// Фото вылетает из плитки и плавно вырастает до полного размера.
+// Летит копия уже загруженной маленькой картинки; настоящее фото показывается, когда она долетела и само загрузилось
+function flyIn(src, viewer) {
+  const media = viewer.querySelector(".media"), img = media?.querySelector("img");
+  const s = src.getBoundingClientRect();
+  if (!img || !s.width || !src.naturalWidth || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const pad = parseFloat(getComputedStyle(media).paddingLeft) || 0, mb = media.getBoundingClientRect();
+  const a = src.naturalWidth / src.naturalHeight;
+  const maxH = parseFloat(getComputedStyle(img).maxHeight) || innerHeight;
+  // Фото встаёт по центру своей области (тот же расчёт, что делает CSS: не шире области и не выше max-height)
+  const boxH = Math.min(maxH, mb.height - pad * 2);
+  const w = Math.min(mb.width - pad * 2, boxH * a), h = w / a;
+  const top = mb.top + (mb.height - h) / 2, left = mb.left + (mb.width - w) / 2;
+  const ghost = document.createElement("img");
+  ghost.className = "fly-ghost"; ghost.src = src.currentSrc || src.src; ghost.alt = "";
+  viewer.appendChild(ghost);
+  media.classList.add("flying");
+  const anim = ghost.animate([
+    { left: s.left + "px", top: s.top + "px", width: s.width + "px", height: s.height + "px", borderRadius: "6px" },
+    { left: left + "px", top: top + "px", width: w + "px", height: h + "px", borderRadius: "8px" }
+  ], { duration: 380, easing: "cubic-bezier(.2, .9, .25, 1)", fill: "forwards" });
+  const reveal = () => {
+    media.classList.remove("flying");
+    ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 180, fill: "forwards" }).onfinish = () => ghost.remove();
+  };
+  anim.onfinish = () => { if (img.complete && img.naturalWidth) reveal(); else { img.onload = reveal; img.onerror = reveal; } };
+}
+
 // silent: закрыть без шага «назад» в истории (когда уходим по ссылке или уже нажали «Назад»)
 function closeViewer(silent = false) {
   const el = document.getElementById("viewer");
@@ -1311,7 +1352,7 @@ document.addEventListener("click", async e => {
     document.querySelector(".viewer .c-form textarea")?.focus();
     return;
   }
-  const open = e.target.closest("[data-open]"); if (open) return openViewer(open.dataset.open);
+  const open = e.target.closest("[data-open]"); if (open) return openViewer(open.dataset.open, 0, open.querySelector("img"));
   const go = e.target.closest("[data-go]"); if (go) return openViewer(go.dataset.go, Number(go.dataset.dir || 0));
   if (e.target.closest("[data-close]")) return closeViewer();
   if (e.target.closest(".viewer a")) return closeViewer(true);   // ссылка сама откроет новую страницу
@@ -1735,6 +1776,44 @@ function onNewStuff(kind, row) {
     await loadAll(); location.hash = kind === "media" ? "#/" : "#/quotes"; route();
   });
 }
+
+// ---------- Потянул страницу вниз — обновление (на телефоне) ----------
+// Сверху выезжает неоновая «К»: тянешь дальше — она загорается, отпустил — сайт подтягивает свежее
+(function pullToRefresh() {
+  const PULL = 100;   // на сколько пикселей потянуть, чтобы сработало
+  let sy = 0, pull = 0, active = false, busy = false;
+  const ind = document.createElement("div");
+  ind.className = "ptr"; ind.innerHTML = "<span>К</span>";
+  document.body.appendChild(ind);
+  const allowed = () => state.session && !busy && scrollY <= 0 && !document.getElementById("viewer") &&
+    !document.body.classList.contains("in-chat") && matchMedia("(pointer: coarse)").matches;
+  const reset = () => { ind.className = "ptr"; ind.style.transform = ""; ind.style.opacity = ""; };
+  document.addEventListener("touchstart", e => {
+    active = e.touches.length === 1 && allowed();
+    sy = e.touches[0].clientY; pull = 0;
+  }, { passive: true });
+  document.addEventListener("touchmove", e => {
+    if (!active) return;
+    pull = Math.max(0, e.touches[0].clientY - sy);
+    const p = Math.min(1, pull / PULL);
+    ind.classList.add("drag");
+    ind.classList.toggle("ready", p >= 1);
+    ind.style.transform = `translate(-50%, ${Math.min(pull * .55, 70) - 56}px) scale(${.6 + p * .4})`;
+    ind.style.opacity = p;
+  }, { passive: true });
+  document.addEventListener("touchend", async () => {
+    if (!active) return;
+    active = false;
+    if (pull < PULL) return reset();
+    busy = true;
+    ind.className = "ptr spin"; ind.style.transform = ""; ind.style.opacity = "";
+    navigator.vibrate?.(15);
+    try { await Promise.all([loadAll(), loadChats().catch(() => {})]); saveCache(); paintChatBadge(); } catch (e) {}
+    await route();
+    busy = false;
+    reset();
+  });
+})();
 
 // ---------- Обновление сайта ----------
 // Приложение с экрана «Домой» на iPhone не перезагружается, а просто «просыпается» со старой версией.

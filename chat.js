@@ -339,6 +339,7 @@ async function viewChat(id) {
   stickToBottom(box);
   paintPin(c);
   wireSwipeReply();
+  wireLongPress();
   paintTicks();
   paintPresence();
   markRead(id);
@@ -380,6 +381,24 @@ function isJumbo(text) {
   return parts.length <= 3 && parts.every(p => /\p{Extended_Pictographic}/u.test(p));
 }
 
+// Живые эмодзи: у каждого крупного эмодзи своя анимация — 🔥 горит, ❤️ бьётся, 😂 трясётся от смеха, остальные покачиваются
+const LIVE_EMOJI = [
+  [/🔥|💥|⚡/u, "fire"],
+  [/❤|💖|💗|💓|💕|💘|💞|🩷|🧡|💛|💚|💙|💜|🖤|🤍|♥/u, "heart"],
+  [/😂|🤣|😆|😹/u, "laugh"],
+  [/👍|👏|🙌|💪|🤝/u, "clap"],
+  [/😭|😢|🥲/u, "cry"]
+];
+function jumboHtml(text) {
+  const parts = typeof Intl.Segmenter === "function"
+    ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text.trim())].map(s => s.segment).filter(s => s.trim())
+    : Array.from(text.replace(/\s/g, ""));
+  return parts.map((p, i) => {
+    const kind = (LIVE_EMOJI.find(([re]) => re.test(p)) || [, "bob"])[1];
+    return `<span class="je je-${kind}" style="--d:${i * .18}s">${esc(p)}</span>`;
+  }).join("");
+}
+
 // next: следующее сообщение. Если оно из того же блока, у этого нет «хвостика» и аватарки
 function msgHtml(m, prev, c, isNew = false, next = null) {
   const mine = m.author === me();
@@ -403,7 +422,7 @@ function msgHtml(m, prev, c, isNew = false, next = null) {
         ${m.image_path ? `<img class="m-img" src="${chatUrl(m.image_path)}" data-zoom="${esc(m.image_path)}" alt="Фото" loading="lazy">` : ""}
         ${m.audio_path ? voiceHtml(m) : ""}
         ${Array.isArray(m.poll?.options) ? `<div class="poll" data-poll="${m.id}">${pollInner(m)}</div>` : ""}
-        ${m.text ? `<p class="m-text">${jumbo ? esc(m.text) : linkify(esc(m.text))}<span class="m-meta">${meta}</span></p>`
+        ${m.text ? `<p class="m-text">${jumbo ? jumboHtml(m.text) : linkify(esc(m.text))}<span class="m-meta">${meta}</span></p>`
           : m.image_path && !m.audio_path && !m.poll ? `<span class="m-meta on-img">${meta}</span>`
           : `<span class="m-meta m-meta-block">${meta}</span>`}
       </div>
@@ -411,6 +430,7 @@ function msgHtml(m, prev, c, isNew = false, next = null) {
       <div class="m-actions">
         ${Object.entries(EMOJI).map(([k, e]) => `<button type="button" data-mact="react" data-emoji="${k}" aria-label="Реакция">${e}</button>`).join("")}
         <button type="button" data-mact="reply">Ответить</button>
+        ${m.text ? `<button type="button" data-mact="copy">Копировать</button>` : ""}
         <button type="button" data-mact="pin" title="Закрепить вверху чата">📌</button>
         ${mine ? `<button type="button" data-mact="del" class="danger">Удалить</button>` : ""}
       </div>
@@ -761,6 +781,7 @@ async function sendMessage(c, { text = null, file = null, audio = null, duration
   inner.querySelector(".msgs-empty")?.remove();
   inner.appendChild(temp);
   box.scrollTop = box.scrollHeight;
+  const flight = flyFromComposer(temp.querySelector(".bubble"));
 
   try {
     let image_path = null, audio_path = null;
@@ -783,8 +804,9 @@ async function sendMessage(c, { text = null, file = null, audio = null, duration
     if (poll) row.poll = poll;
     const { data, error } = await sb.from("messages").insert(row).select().single();
     if (error) throw error;
+    await flight;   // сервер ответил быстрее, чем пузырь долетел — даём ему долететь
     temp.remove();
-    addMessage(data);
+    addMessage(data, true);   // без второй анимации появления: пузырь уже прилетел
   } catch (err) {
     temp.classList.remove("pending");
     temp.classList.add("failed");
@@ -792,8 +814,22 @@ async function sendMessage(c, { text = null, file = null, audio = null, duration
   }
 }
 
+// Отправленный пузырь вылетает из поля ввода и встаёт на своё место, как в iMessage
+function flyFromComposer(bubble) {
+  const pill = document.querySelector("#composer .pill");
+  if (!bubble || !pill || matchMedia("(prefers-reduced-motion: reduce)").matches) return Promise.resolve();
+  const p = pill.getBoundingClientRect(), b = bubble.getBoundingClientRect();
+  if (!b.width) return Promise.resolve();
+  const dx = p.left + 10 - b.left, dy = p.top + p.height / 2 - (b.top + b.height / 2);
+  return bubble.animate([
+    { transform: `translate(${dx}px, ${dy}px) scale(.92)`, opacity: .5, transformOrigin: "left center" },
+    { transform: "none", opacity: 1, transformOrigin: "left center" }
+  ], { duration: 420, easing: "cubic-bezier(.2, .9, .25, 1.08)" }).finished.catch(() => {});
+}
+
 // Добавить сообщение в открытый чат (своё после отправки или чужое из живых обновлений)
-function addMessage(m) {
+// quiet: без анимации появления (своё отправленное — оно уже прилетело из поля ввода)
+function addMessage(m, quiet = false) {
   if (chat.messages.some(x => x.id === m.id)) return;
   const c = chat.list.find(x => x.id === m.chat_id);
   const box = document.getElementById("msgs"), inner = document.getElementById("msgsIn");
@@ -805,7 +841,7 @@ function addMessage(m) {
   inner.querySelector(".msgs-empty")?.remove();
   // Новое сообщение продолжает блок — у предыдущего убираем «хвостик»
   if (sameRunAs(prev, m)) document.querySelector(`[data-mid="${prev.id}"]`)?.classList.remove("tail");
-  inner.insertAdjacentHTML("beforeend", msgHtml(m, prev, c, true));
+  inner.insertAdjacentHTML("beforeend", msgHtml(m, prev, c, !quiet));
   if (nearBottom || m.author === me()) { box.scrollTop = box.scrollHeight; chat.atBottom = true; }
   else { chat.newBelow++; paintToBottom(); }   // листаешь историю — копим счётчик на кнопке «вниз»
   chat.last[m.chat_id] = m;
@@ -984,6 +1020,12 @@ document.addEventListener("click", async e => {
     const id = act.closest("[data-mid]").dataset.mid;
     const m = chat.messages.find(x => x.id === id);
     act.closest(".msg").classList.remove("active");
+    syncActive();
+    if (act.dataset.mact === "copy") {
+      // Текст в пузыре не выделяется (чтобы долгое нажатие открывало реакции), поэтому копируем кнопкой
+      navigator.clipboard?.writeText(m?.text || "").then(() => toast("Скопировано"), () => toast("Не получилось скопировать"));
+      return;
+    }
     if (act.dataset.mact === "react") return toggleMsgReact(id, act.dataset.emoji, act.closest(".msg").querySelector(".bubble"));
     if (act.dataset.mact === "reply") return setReply(m);
     if (act.dataset.mact === "del") return deleteMessage(id);
@@ -1022,17 +1064,51 @@ document.addEventListener("click", async e => {
     if (!error) { await loadChats(); viewChat(chat.open); }
     return;
   }
+  // Сразу после долгого нажатия браузер присылает ещё и обычное нажатие — его пропускаем, иначе меню тут же закроется
+  if (Date.now() - longPressAt < 600) return;
   // Нажатие на пузырь показывает реакции и «Ответить»
   const bubble = e.target.closest("[data-bubble]");
   document.querySelectorAll(".msg.active").forEach(x => { if (!bubble || x !== bubble.closest(".msg")) x.classList.remove("active"); });
-  if (bubble && !e.target.closest("a")) {
-    const msg = bubble.closest(".msg");
-    // У самого верхнего сообщения меню не помещается сверху — показываем его снизу
-    const box = document.getElementById("msgs");
-    msg.classList.toggle("below", bubble.getBoundingClientRect().top - box.getBoundingClientRect().top < 64);
-    msg.classList.toggle("active");
-  }
+  if (bubble && !e.target.closest("a")) openMsgMenu(bubble, true);
+  syncActive();
 });
+
+// Меню сообщения: веер реакций, «Ответить», «Копировать»... toggle — нажатие ещё раз закрывает
+function openMsgMenu(bubble, toggle = false) {
+  const msg = bubble.closest(".msg"), box = document.getElementById("msgs");
+  // У самого верхнего сообщения меню не помещается сверху — показываем его снизу
+  msg.classList.toggle("below", bubble.getBoundingClientRect().top - box.getBoundingClientRect().top < 64);
+  if (toggle) msg.classList.toggle("active"); else msg.classList.add("active");
+  syncActive();
+}
+// Пока меню открыто, остальные сообщения приглушены — всё внимание на выбранное
+function syncActive() {
+  document.getElementById("msgs")?.classList.toggle("has-active", !!document.querySelector(".msgs-in .msg.active"));
+}
+
+// Долгое нажатие на сообщение (телефон) — меню с лёгкой вибрацией, как в Telegram
+let longPressAt = 0;
+function wireLongPress() {
+  const box = document.getElementById("msgs"); if (!box) return;
+  let timer = null, sx = 0, sy = 0;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  box.addEventListener("touchstart", e => {
+    const bubble = e.target.closest("[data-bubble]");
+    if (!bubble || e.target.closest("a, button, .voice, .poll") || e.touches.length > 1) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY;
+    timer = setTimeout(() => {
+      timer = null; longPressAt = Date.now();
+      document.querySelectorAll(".msg.active").forEach(x => x.classList.remove("active"));
+      openMsgMenu(bubble);
+      navigator.vibrate?.(18);
+    }, 380);
+  }, { passive: true });
+  box.addEventListener("touchmove", e => {
+    if (timer && Math.hypot(e.touches[0].clientX - sx, e.touches[0].clientY - sy) > 10) cancel();
+  }, { passive: true });
+  box.addEventListener("touchend", cancel);
+  box.addEventListener("touchcancel", cancel);
+}
 
 function toggleAddPeople() {
   const box = document.getElementById("addPpl"); if (!box) return;

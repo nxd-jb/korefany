@@ -139,7 +139,9 @@ body.scrolled .capsule { border-color: rgba(255, 79, 216, .7); box-shadow: 0 0 0
 .ava img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .ava.big { width: 76px; height: 76px; font-size: 30px; box-shadow: 0 0 0 2px var(--accent), var(--glow); }
 
-main.wrap { padding-block: 28px 64px; display: grid; gap: 28px; animation: fade .35s ease both; }
+main.wrap { padding-block: 28px 64px; display: grid; gap: 28px; animation: page-in .42s cubic-bezier(.2, .9, .25, 1) both; }
+/* Новая страница мягко выплывает снизу */
+@keyframes page-in { from { opacity: 0; transform: translateY(14px); } }
 h1 {
   font-family: var(--font-logo); font-weight: 400; font-size: clamp(22px, 4vw, 32px); margin: 0; line-height: 1.15;
   background: linear-gradient(90deg, var(--fg) 30%, var(--accent) 75%, var(--accent-2)); -webkit-background-clip: text; background-clip: text; color: transparent;
@@ -159,6 +161,13 @@ h2 { font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: va
 .tile:hover { transform: translateY(-3px); box-shadow: 0 0 0 1px rgba(255, 79, 216, .5), 0 8px 30px rgba(255, 79, 216, .25); }
 .tile img { width: 100%; height: auto; display: block; }
 .tile .play { position: absolute; right: 8px; top: 8px; background: rgba(0, 0, 0, .6); border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: 700; color: var(--accent-2); }
+/* Фото проявляются: появляются из прозрачности и лёгкого размытия, когда загрузятся */
+img.fade { opacity: 0; filter: blur(8px); transition: opacity .5s ease, filter .6s ease; }
+img.fade.loaded { opacity: 1; filter: none; }
+/* В посте под чётким фото лежит размытое превью — оно задаёт размер, чёткое проступает поверх */
+.post-media { overflow: hidden; }
+.post-media img.ph { filter: blur(14px) saturate(1.2); transform: scale(1.06); }
+.post-media img.full.fade { position: absolute; inset: 0; height: 100%; max-height: none; }
 .tile .noimg { display: grid; place-items: center; aspect-ratio: 4 / 3; color: var(--muted); font-size: 28px; }
 .tile .rc { position: absolute; left: 8px; bottom: 8px; background: rgba(0, 0, 0, .6); border-radius: 999px; padding: 2px 8px; font-size: 12px; font-weight: 700; }
 /* Обложка ленты */
@@ -403,6 +412,34 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 .msg.jumbo .m-text { font-size: 48px; line-height: 1.1; }
 .msg.jumbo .m-meta { float: none; display: flex; justify-content: flex-end; margin: 2px 0 0; color: var(--muted); }
 .msg.jumbo.new .m-text { display: inline-block; animation: jumbo-pop .6s cubic-bezier(.2, 1.6, .4, 1) both; }
+/* Живые эмодзи: каждый крупный эмодзи двигается по-своему. Между движениями — пауза, чтобы не мельтешило */
+.je { display: inline-block; animation-delay: var(--d, 0s); animation-iteration-count: infinite; will-change: transform; }
+.je-fire { transform-origin: 50% 90%; animation: je-fire 1.6s ease-in-out infinite; animation-delay: var(--d); }
+.je-heart { animation: je-heart 1.4s ease-in-out infinite; animation-delay: var(--d); }
+.je-laugh { animation: je-laugh 2.4s ease-in-out infinite; animation-delay: var(--d); }
+.je-clap { animation: je-clap 2.2s ease-in-out infinite; animation-delay: var(--d); }
+.je-cry { transform-origin: 50% 100%; animation: je-cry 2.6s ease-in-out infinite; animation-delay: var(--d); }
+.je-bob { animation: je-bob 3s ease-in-out infinite; animation-delay: var(--d); }
+@keyframes je-fire {
+  0%, 100% { transform: scale(1, 1) skewX(0); filter: drop-shadow(0 0 6px rgba(255, 140, 40, .6)); }
+  25% { transform: scale(.96, 1.08) skewX(-3deg); filter: drop-shadow(0 -2px 12px rgba(255, 120, 30, .9)); }
+  50% { transform: scale(1.04, .95) skewX(2deg); }
+  75% { transform: scale(.98, 1.06) skewX(-1deg); filter: drop-shadow(0 -1px 10px rgba(255, 170, 40, .8)); }
+}
+@keyframes je-heart {
+  0%, 40%, 100% { transform: scale(1); }
+  10% { transform: scale(1.22); filter: drop-shadow(0 0 12px rgba(255, 60, 120, .9)); }
+  20% { transform: scale(1); }
+  30% { transform: scale(1.14); filter: drop-shadow(0 0 8px rgba(255, 60, 120, .7)); }
+}
+@keyframes je-laugh {
+  0%, 45%, 100% { transform: rotate(0) translateY(0); }
+  50%, 60%, 70%, 80% { transform: rotate(-9deg) translateY(-3px); }
+  55%, 65%, 75% { transform: rotate(9deg) translateY(0); }
+}
+@keyframes je-clap { 0%, 60%, 100% { transform: scale(1) rotate(0); } 70% { transform: scale(1.18) rotate(-10deg); } 80% { transform: scale(.95) rotate(6deg); } 90% { transform: scale(1.1) rotate(-4deg); } }
+@keyframes je-cry { 0%, 50%, 100% { transform: scale(1, 1); } 60% { transform: scale(1.06, .9); } 70% { transform: scale(.96, 1.05); } 80% { transform: scale(1.03, .95); } }
+@keyframes je-bob { 0%, 100% { transform: translateY(0) rotate(0); } 50% { transform: translateY(-4px) rotate(4deg); } }
 @keyframes jumbo-pop { 0% { transform: scale(.2) rotate(-20deg); opacity: 0; } 60% { transform: scale(1.25) rotate(8deg); } 100% { transform: none; opacity: 1; } }
 
 /* Полоска «Новые сообщения» */
@@ -643,9 +680,31 @@ body.in-chat { padding-bottom: 0; }
 .msg.mine .m-actions { left: auto; right: 0; }
 .msg.active .m-actions { display: flex; animation: pop-in .25s cubic-bezier(.2, 1.4, .4, 1) both; }
 .m-actions button { border: 0; background: none; border-radius: 999px; padding: 4px 8px; cursor: pointer; font-size: 18px; }
-.m-actions button[data-mact="reply"], .m-actions button[data-mact="del"] { font-size: 13px; font-weight: 700; }
+.m-actions button[data-mact="reply"], .m-actions button[data-mact="del"], .m-actions button[data-mact="copy"] { font-size: 13px; font-weight: 700; }
 .m-actions button:hover { background: var(--panel-2); }
 .m-actions .danger { color: var(--danger); }
+
+/* Веер реакций: меню раскрывается пружинкой, эмодзи выскакивают по очереди */
+.m-actions { flex-wrap: wrap; justify-content: center; width: max-content; max-width: min(310px, 88vw); border-radius: 22px; padding: 6px; }
+.msg.active .m-actions { animation: fan-open .32s cubic-bezier(.2, 1.5, .4, 1) both; transform-origin: bottom left; }
+.msg.mine.active .m-actions { transform-origin: bottom right; }
+.msg.below.active .m-actions { transform-origin: top left; }
+.msg.active .m-actions button { animation: fan-item .4s cubic-bezier(.2, 1.7, .4, 1) both; }
+.msg.active .m-actions button:nth-child(1) { animation-delay: .04s; }
+.msg.active .m-actions button:nth-child(2) { animation-delay: .08s; }
+.msg.active .m-actions button:nth-child(3) { animation-delay: .12s; }
+.msg.active .m-actions button:nth-child(n+4) { animation-delay: .16s; }
+.m-actions button[data-mact="react"] { font-size: 24px; padding: 2px 6px; transition: transform .15s; }
+.m-actions button[data-mact="react"]:active { transform: scale(1.35); }
+@keyframes fan-open { from { opacity: 0; transform: scale(.4); } }
+@keyframes fan-item { from { opacity: 0; transform: translateY(10px) scale(.3); } }
+/* Пока меню открыто, остальные сообщения приглушены, а выбранное чуть приподнято */
+.msgs-in .msg { transition: opacity .25s; }
+.msgs.has-active .msgs-in .msg:not(.active) { opacity: .3; }
+.msgs-in .msg.active { z-index: 6; }
+.msgs-in .msg.active .bubble { transform: scale(1.03); transition: transform .2s cubic-bezier(.2, 1.4, .4, 1); }
+/* Долгое нажатие открывает меню, а не выделение текста и не системное меню iPhone */
+.msgs-in .bubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 
 /* Анимации сообщений */
 .msg.new { animation: msg-in .4s cubic-bezier(.2, 1.3, .4, 1) both; }
@@ -952,6 +1011,9 @@ body.viewer-open { overflow: hidden; }
 .viewer .media.from-right > * { animation: from-right .28s ease both; }
 .viewer .media.from-left > * { animation: from-left .28s ease both; }
 .viewer .info { position: relative; }
+/* Пока летит копия фото из плитки, настоящее фото спрятано */
+.viewer .media.flying img { opacity: 0; animation: none; }
+.fly-ghost { position: fixed; z-index: 3; object-fit: cover; pointer-events: none; box-shadow: 0 0 60px rgba(255, 79, 216, .25); }
 @keyframes from-right { from { opacity: 0; transform: translateX(40px); } }
 @keyframes from-left { from { opacity: 0; transform: translateX(-40px); } }
 .viewer .media img, .viewer .media video { max-width: 100%; max-height: calc(100vh - 32px); border-radius: 8px; box-shadow: 0 0 60px rgba(255, 79, 216, .25); animation: zoom .3s ease both; }
@@ -991,6 +1053,22 @@ body.viewer-open { overflow: hidden; }
   .grid { column-width: 150px; column-gap: 8px; }
   .tile { margin-bottom: 8px; }
 }
+
+/* Обновление свайпом вниз: неоновая «К» сверху */
+.ptr {
+  position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 10px); z-index: 45; pointer-events: none;
+  width: 46px; height: 46px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(21, 17, 31, .92); border: 1px solid var(--line); box-shadow: 0 6px 20px rgba(0, 0, 0, .5);
+  font-family: var(--font-logo); font-size: 20px; color: #5d4f6d;
+  transform: translate(-50%, -70px); opacity: 0; transition: transform .3s cubic-bezier(.2, 1.3, .4, 1), opacity .25s, border-color .2s;
+}
+.ptr.drag { transition: border-color .2s; }
+.ptr.ready, .ptr.spin { border-color: var(--accent); }
+.ptr.ready span, .ptr.spin span { color: #ffe6fb; text-shadow: 0 0 6px var(--accent), 0 0 16px var(--accent), 0 0 30px rgba(255, 79, 216, .7); }
+.ptr.ready span { animation: pop .3s ease; }
+.ptr.spin { transform: translate(-50%, 14px); opacity: 1; }
+.ptr.spin span { animation: ptr-flicker 1s ease-in-out infinite; }
+@keyframes ptr-flicker { 0%, 100% { opacity: 1; } 20% { opacity: .35; } 24% { opacity: 1; } 60% { opacity: .6; } }
 
 @keyframes fade { from { opacity: 0; } }
 @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.98); } }
