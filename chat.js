@@ -592,7 +592,11 @@ async function toggleVoice(id, seekFrac = null) {
   if (seekFrac !== null && voiceLength()) voicePlayer.currentTime = voiceLength() * seekFrac;
   if (voicePlayer.paused || seekFrac !== null) {
     if (audioCtx?.state === "suspended") audioCtx.resume();
-    voicePlayer.play().catch(() => toast("Не получилось воспроизвести"));
+    voicePlayer.play().catch(() => {
+      // Не заиграло — возвращаем кнопку ▶, иначе на ней застревала пауза
+      toast("Не получилось воспроизвести");
+      el?.classList.remove("playing"); voicePlaying = null;
+    });
     el?.classList.add("playing");
   } else {
     voicePlayer.pause();
@@ -813,7 +817,9 @@ async function sendMessage(c, { text = null, file = null, audio = null, duration
     if (poll) row.poll = poll;
     const { data, error } = await sb.from("messages").insert(row).select().single();
     if (error) throw error;
-    await flight;   // сервер ответил быстрее, чем пузырь долетел — даём ему долететь
+    // Сервер ответил быстрее, чем пузырь долетел — даём ему долететь. Но не дольше полсекунды:
+    // если приложение свернули, анимация замирает, а сообщение не должно зависнуть в «отправляется»
+    await Promise.race([flight, new Promise(r => setTimeout(r, 500))]);
     temp.remove();
     addMessage(data, true);   // без второй анимации появления: пузырь уже прилетел
   } catch (err) {

@@ -50,7 +50,9 @@ async function saveSubscription(sub) {
 async function unlinkPushDevice() {
   try {
     if (!("serviceWorker" in navigator) || !secureSite) return;
-    const sub = await (await swReady()).pushManager.getSubscription();
+    // getRegistration отвечает сразу; ready ждал бы 5 секунд там, где помощник не запустился, — и выход тормозил
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = await reg?.pushManager?.getSubscription();
     if (sub) await sb.from("push_subscriptions").delete().eq("endpoint", sub.endpoint);
   } catch (e) {}
 }

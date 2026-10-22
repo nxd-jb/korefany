@@ -1191,7 +1191,7 @@ async function openPhoneViewer(list, idx, fromEl = null, dir = 0) {
   const near = [prev, m, next].filter(Boolean);
   await signed(near.flatMap(x => [x.path, thumbPath(x), midPath(x)]));
   // Следующие за соседними подгружаем заранее, чтобы листать без ожидания
-  signed([list[idx - 2], list[idx + 2]].filter(Boolean).flatMap(x => [x.path, thumbPath(x), midPath(x)]));
+  signed([list[idx - 2], list[idx + 2]].filter(Boolean).flatMap(x => [x.path, thumbPath(x), midPath(x)])).catch(() => {});
   const old = document.getElementById("viewer");
   const fresh = !old;
   old?.remove();
@@ -1241,7 +1241,8 @@ async function openPhoneViewer(list, idx, fromEl = null, dir = 0) {
 function openPvSheet() {
   const w = document.querySelector(".viewer .pv-sheet-wrap"); if (!w) return false;
   w.hidden = false;
-  requestAnimationFrame(() => w.classList.add("open"));
+  void w.offsetWidth;   // сначала шторка появляется внизу, потом выезжает
+  w.classList.add("open");
   return true;
 }
 function closePvSheet() {
@@ -1335,11 +1336,16 @@ function flyIn(src, viewer) {
     { left: s.left + "px", top: s.top + "px", width: s.width + "px", height: s.height + "px", borderRadius: "6px" },
     { left: left + "px", top: top + "px", width: w + "px", height: h + "px", borderRadius: "8px" }
   ], { duration: 380, easing: "cubic-bezier(.2, .9, .25, 1)", fill: "forwards" });
+  let shown = false;
   const reveal = () => {
+    if (shown) return; shown = true;
     media.classList.remove("flying");
     ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 180, fill: "forwards" }).onfinish = () => ghost.remove();
+    setTimeout(() => ghost.remove(), 400);   // на случай, если анимация замерла (приложение свернули)
   };
-  anim.onfinish = () => { if (img.complete && img.naturalWidth) reveal(); else { img.onload = reveal; img.onerror = reveal; } };
+  const whenLoaded = () => { if (img.complete && img.naturalWidth) reveal(); else { img.onload = reveal; img.onerror = reveal; } };
+  anim.onfinish = whenLoaded;
+  setTimeout(whenLoaded, 600);   // запасной путь: фото не должно остаться спрятанным, даже если полёт не доиграл
 }
 
 // silent: закрыть без шага «назад» в истории (когда уходим по ссылке или уже нажали «Назад»)
@@ -1515,7 +1521,7 @@ document.addEventListener("keydown", e => {
   // Постер-фильтр в галерее выбирается и с клавиатуры
   if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("[data-gfilter]")) { e.preventDefault(); e.target.click(); return; }
   if (!document.getElementById("viewer")) return;
-  if (e.target.closest("textarea, input")) return;   // пишут комментарий — стрелки не листают
+  if (e.target.closest?.("textarea, input")) return;   // пишут комментарий — стрелки не листают
   if (e.key === "Escape") closeViewer();
   if (e.key === "ArrowLeft") document.querySelector(".viewer .prev")?.click();
   if (e.key === "ArrowRight") document.querySelector(".viewer .next")?.click();
@@ -1536,6 +1542,8 @@ async function uploadOne(file, { tags, caption, takenAt }) {
   } else {
     const img = await decodeImage(file);
     [main, mid, thumb] = await Promise.all([scaleTo(img, 2560, 0.85), scaleTo(img, 1280, 0.82), scaleTo(img, 640, 0.8)]);   // mid — для ленты
+    img.close?.();   // открытое фото держит много памяти — на iPhone при загрузке пачки это важно
+    if (!main) throw new Error("не получилось сжать фото");
     ext = "jpg";
   }
 
@@ -1740,7 +1748,13 @@ function listenAuth() { sb.auth.onAuthStateChange((event, session) => {
   const was = state.session?.user?.id;
   state.session = session;
   setTimeout(async () => {
-    if (!session) { stopLive(); state.profiles = []; state.media = []; return viewLogin(); }
+    if (!session) {
+      // Вышли (или вход истёк) — закрываем всё открытое, иначе экран входа остался бы с классами переписки
+      stopLive(); closeViewer(true); if (typeof chatLeave === "function") chatLeave();
+      state.profiles = []; state.media = []; state.meTab = "profile";
+      history.replaceState(null, "", "#/");   // после нового входа — сразу лента
+      return viewLogin();
+    }
     if (was !== session.user.id) {
       // Уже заходил с этого устройства — показываем сохранённое сразу, свежее догрузится в фоне
       const cached = readCache();
@@ -1915,7 +1929,7 @@ function onNewStuff(kind, row) {
 // Сверху выезжает неоновая «К»: тянешь дальше — она загорается, отпустил — сайт подтягивает свежее
 (function pullToRefresh() {
   const PULL = 100;   // на сколько пикселей потянуть, чтобы сработало
-  let sy = 0, pull = 0, active = false, busy = false;
+  let sx = 0, sy = 0, pull = 0, active = false, busy = false;
   const ind = document.createElement("div");
   ind.className = "ptr"; ind.innerHTML = "<span>К</span>";
   document.body.appendChild(ind);
@@ -1924,11 +1938,14 @@ function onNewStuff(kind, row) {
   const reset = () => { ind.className = "ptr"; ind.style.transform = ""; ind.style.opacity = ""; };
   document.addEventListener("touchstart", e => {
     active = e.touches.length === 1 && allowed();
-    sy = e.touches[0].clientY; pull = 0;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; pull = 0;
   }, { passive: true });
   document.addEventListener("touchmove", e => {
     if (!active) return;
+    const dx = Math.abs(e.touches[0].clientX - sx);
     pull = Math.max(0, e.touches[0].clientY - sy);
+    // Листают вбок (обложку, постеры в галерее) — это не обновление
+    if (dx > 24 && dx > pull) { active = false; return reset(); }
     const p = Math.min(1, pull / PULL);
     ind.classList.add("drag");
     ind.classList.toggle("ready", p >= 1);
