@@ -397,7 +397,7 @@ function msgHtml(m, prev, c, isNew = false, next = null) {
     ${showWho ? `<a href="#/p/${m.author}" class="m-ava">${avatar(m.author)}</a>` : ""}
     <div class="m-body">
       ${head ? `<span class="m-name">${esc(nameOf(m.author))}</span>` : ""}
-      <div class="bubble" data-bubble>
+      <div class="bubble${m.image_path && !m.text && !m.reply_to && !m.audio_path && !m.poll ? " media-only" : ""}" data-bubble>
         ${m.reply_to ? `<button type="button" class="m-reply" data-jump="${m.reply_to}">
           <b>${orig ? esc(nameOf(orig.author)) : "Сообщение"}</b><span>${orig ? esc(msgSummary(orig)) : "удалено"}</span></button>` : ""}
         ${m.image_path ? `<img class="m-img" src="${chatUrl(m.image_path)}" data-zoom="${esc(m.image_path)}" alt="Фото" loading="lazy">` : ""}

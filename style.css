@@ -366,7 +366,16 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 /* Пузыри: подряд идущие склеиваются, «хвостик» только у последнего в блоке */
 .msgs-in .msg { max-width: min(80%, 520px); }
 .msgs-in .msg:not(.run) { margin-top: 10px; }
-.msgs-in .bubble { border-radius: 18px; padding: 7px 12px 7px; }
+.msgs-in .bubble { border-radius: 18px; padding: 6px 12px 6px; }
+/* Фото без подписи — без рамки вокруг, как в Telegram: только само фото со скруглёнными углами */
+.msgs-in .bubble.media-only { padding: 0; background: none !important; border: 0; box-shadow: none !important; overflow: hidden; }
+.msgs-in .bubble.media-only .m-img { margin: 0; border-radius: inherit; max-width: min(100%, 300px); }
+/* Фото с подписью — тонкая рамка, фото во всю ширину пузыря */
+.msgs-in .bubble:not(.media-only) .m-img { margin: -2px -8px 6px; max-width: calc(100% + 16px); border-radius: 13px; }
+/* У своих пузырей рамки нет: под прозрачной рамкой градиент повторялся, и слева проступала светлая полоска.
+   Отступ на 1px больше, чтобы размер совпадал с чужими пузырями (у них рамка 1px) */
+.msgs-in .msg.mine .bubble { border: 0; padding: 7px 13px; }
+.msgs-in .msg .bubble.media-only { padding: 0; }
 .msgs-in .msg:not(.mine) .bubble { background: #221b31; border-color: #2e2542; }
 .msgs-in .msg:not(.mine).run .bubble { border-top-left-radius: 6px; }
 .msgs-in .msg:not(.mine):not(.tail) .bubble { border-bottom-left-radius: 6px; }
@@ -379,9 +388,12 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 .msgs-in .msg.tail .m-ava { visibility: visible; }
 
 /* Время и галочки внутри пузыря, в правом нижнем углу */
-.m-meta { float: right; display: inline-flex; align-items: center; gap: 3px; margin: 7px 0 -5px 10px; font-size: 11px; line-height: 1; opacity: .7; white-space: nowrap; }
-.m-meta time { display: inline; margin: 0; opacity: 1; }
-.m-meta.on-img { float: none; position: absolute; right: 18px; bottom: 12px; padding: 3px 7px; border-radius: 999px; background: rgba(0, 0, 0, .55); opacity: 1; color: #fff; }
+/* Время стоит в той же строке, что и конец текста, и на одной линии с буквами, как в Telegram.
+   Для этого у текста и у блока времени одна и та же высота строки (20px): тогда их базовые линии совпадают */
+.msgs-in .m-text { font-size: 15px; line-height: 20px; }
+.m-meta { float: right; display: block; height: 20px; line-height: 20px; margin: 0 0 0 8px; position: relative; top: 1px; font-size: 11px; opacity: .7; white-space: nowrap; }
+.bubble .m-meta time { display: inline; margin: 0; opacity: 1; font-size: 11px; }
+.m-meta.on-img { float: none; position: absolute; top: auto; right: 8px; bottom: 8px; height: auto; line-height: 1; padding: 4px 8px; border-radius: 999px; background: rgba(0, 0, 0, .55); opacity: 1; color: #fff; }
 .msgs-in .bubble { position: relative; }
 .tick { font-style: normal; font-size: 12px; letter-spacing: -3px; padding-right: 3px; transition: color .3s, text-shadow .3s; }
 .tick.read { color: #8ff4ff; text-shadow: 0 0 6px rgba(62, 230, 255, .9); }
