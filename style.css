@@ -668,6 +668,11 @@ body.in-chat { padding-bottom: 0; }
 .attach { flex: none; width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--line); background: var(--panel-2); color: var(--accent-2); cursor: pointer; transition: box-shadow .2s, border-color .2s; }
 .attach:hover { border-color: var(--accent-2); box-shadow: var(--glow-2); }
 .attach svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+/* Safari на iPhone оставляет у кнопок свои внутренние отступы и плохо центрирует сетку внутри <button>:
+   значки скрепки, микрофона и «отправить» съезжали вправо. Убираем отступы и центрируем через flex */
+.attach, .c-send, .to-bottom { padding: 0; display: flex; align-items: center; justify-content: center; line-height: 0; }
+.attach svg, .c-send svg, .to-bottom svg { display: block; flex: none; margin: 0; }
+.to-bottom .tb-count { line-height: 1; }
 
 /* Фото на весь экран */
 /* Фото из чата на весь экран: всегда целиком помещается в окно, и высокие скриншоты тоже */
