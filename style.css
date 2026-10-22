@@ -361,15 +361,40 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 .chat-main .composer { padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); background: rgba(21, 17, 31, .92); }
 @media (min-width: 861px) { .chat-head .back { display: none; } }
 
-/* Фон переписки: неоновые точки и мягкие пятна, как обои в Telegram */
-.chat-main .msgs {
-  display: block; padding: 14px 16px; overflow-x: hidden;
+/* Фон переписки: сверху мягкое свечение в цвете собеседника (--ca, --cb ставит chatTheme),
+   и три размытых пятна того же цвета очень медленно переливаются. Пятна — отдельный слой под перепиской:
+   двигает их видеокарта, прокрутка и сообщения от этого не тормозят */
+.chat-main { background: #0d0a15; isolation: isolate; }
+.chat-bg { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; border-radius: inherit; }
+.chat-bg::before {
+  content: ""; position: absolute; inset: 0;
   background:
-    radial-gradient(circle at 15% 20%, rgba(255, 79, 216, .10), transparent 40%),
-    radial-gradient(circle at 85% 80%, rgba(62, 230, 255, .08), transparent 45%),
-    radial-gradient(rgba(255, 255, 255, .06) 1px, transparent 1.2px) 0 0 / 18px 18px,
-    #0d0a15;
+    radial-gradient(130% 45% at 50% 6%, color-mix(in srgb, var(--ca, #ff4fd8) 15%, transparent), transparent 72%),
+    linear-gradient(180deg, transparent 55%, color-mix(in srgb, var(--cb, #8a3cff) 5%, transparent));
 }
+/* Пятна еле заметные (Костя: «слишком размыто») — фон почти тёмный, цвет только угадывается */
+.chat-bg i { position: absolute; width: 80%; aspect-ratio: 1; border-radius: 50%; will-change: transform; }
+.chat-bg i:nth-child(1) { left: -25%; top: 8%; background: radial-gradient(closest-side, color-mix(in srgb, var(--ca, #ff4fd8) 11%, transparent), transparent); animation: aurora-a 26s ease-in-out infinite alternate; }
+.chat-bg i:nth-child(2) { right: -30%; top: 38%; background: radial-gradient(closest-side, color-mix(in srgb, var(--cb, #8a3cff) 12%, transparent), transparent); animation: aurora-b 32s ease-in-out infinite alternate; }
+.chat-bg i:nth-child(3) { left: 5%; bottom: -30%; background: radial-gradient(closest-side, color-mix(in srgb, var(--ca, #ff4fd8) 8%, transparent), transparent); animation: aurora-c 38s ease-in-out infinite alternate; }
+@keyframes aurora-a { to { transform: translate3d(35%, 20%, 0) scale(1.15); } }
+@keyframes aurora-b { to { transform: translate3d(-30%, -18%, 0) scale(.9); } }
+@keyframes aurora-c { to { transform: translate3d(20%, -30%, 0) scale(1.2); } }
+.chat-main .msgs { display: block; padding: 14px 16px; overflow-x: hidden; background: none; }
+/* Пузыри-«стекло»: полупрозрачные, через них проступает фон, по верхнему краю — светлый блик.
+   Без backdrop-filter: размытие под каждым пузырём на iPhone тормозило бы прокрутку */
+.chat-main .msgs-in .msg:not(.mine):not(.jumbo) .bubble:not(.media-only) {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .09), rgba(255, 255, 255, .05)), color-mix(in srgb, var(--ca, #ff4fd8) 5%, rgba(20, 16, 30, .55));
+  border: 1px solid rgba(255, 255, 255, .06); border-top-color: rgba(255, 255, 255, .12);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .25);
+}
+.chat-main .msgs-in .msg.mine:not(.jumbo) .bubble:not(.media-only) {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--uc, #ff4fd8) 42%, transparent), color-mix(in srgb, var(--uc2, #8a3cff) 34%, transparent));
+  /* Рамка и блик — в цвете автора, без белого (Костя: «слишком много белого») */
+  border: 1px solid color-mix(in srgb, var(--uc, #ff4fd8) 30%, transparent); border-top-color: color-mix(in srgb, var(--uc, #ff4fd8) 60%, transparent);
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--uc, #ff4fd8) 18%, transparent);
+}
+.chat-main .chat-head { border-bottom-color: color-mix(in srgb, var(--ca, #ff4fd8) 35%, transparent); }
 .msgs-in { display: flex; flex-direction: column; gap: 2px; max-width: 760px; min-height: 100%; margin: 0 auto; justify-content: flex-end; }
 
 /* Пузыри: подряд идущие склеиваются, «хвостик» только у последнего в блоке */
@@ -404,7 +429,8 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 .bubble .m-meta time { display: inline; margin: 0; opacity: 1; font-size: 11px; }
 .m-meta.on-img { float: none; position: absolute; top: auto; right: 8px; bottom: 8px; height: auto; line-height: 1; padding: 4px 8px; border-radius: 999px; background: rgba(0, 0, 0, .55); opacity: 1; color: #fff; }
 .msgs-in .bubble { position: relative; }
-.tick { font-style: normal; font-size: 12px; letter-spacing: -3px; padding-right: 3px; transition: color .3s, text-shadow .3s; }
+/* Галочки: помельче и с отступом от времени */
+.tick { font-style: normal; font-size: 10px; letter-spacing: -2.5px; margin-left: 4px; padding-right: 2.5px; transition: color .3s, text-shadow .3s; }
 .tick.read { color: #8ff4ff; text-shadow: 0 0 6px rgba(62, 230, 255, .9); }
 
 /* Только эмодзи — крупно, без пузыря */
@@ -463,6 +489,7 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 
 /* Кто в сети: зелёная точка на аватарке */
 .ava-wrap { position: relative; display: inline-flex; flex: none; }
+/* «В сети» — зелёная точка в углу аватарки */
 .ava-wrap.is-online::after { content: ""; position: absolute; right: 0; bottom: 0; width: 12px; height: 12px; border-radius: 50%; background: #3ddc84; border: 2px solid var(--panel); box-shadow: 0 0 8px rgba(61, 220, 132, .8); animation: pop .4s ease; }
 #chSub.online { color: #3ddc84; }
 
@@ -595,7 +622,26 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 .chat-ava { color: var(--accent-ink); font-weight: 800; font-size: 14px; }
 /* Свечение не тенью (box-shadow), а фильтром: iPhone во время анимаций обрезал тень круглого значка по квадрату,
    а drop-shadow повторяет форму самого круга */
-.chat-ava.general { background: radial-gradient(circle at 30% 30%, #ff8ae6, var(--accent)); font-family: var(--font-logo); font-weight: 400; filter: drop-shadow(0 0 6px rgba(255, 79, 216, .65)); }
+/* Свечение общего чата. На iPhone и box-shadow, и filter: drop-shadow давали квадрат вокруг «К».
+   Поэтому свечение — отдельный круг-градиент позади значка: это просто нарисованные пиксели, они круглые везде */
+/* Значок общего чата — маленькая неоновая вывеска: тёмный круг, розовый неоновый контур, светящаяся «К»,
+   которая изредка мигает, как логотип на экране входа */
+/* Всё — тёмный круг, неоновое кольцо и свечение вокруг него — нарисовано одним круговым градиентом
+   ВНУТРИ значка и плавно гаснет к его краю. Так свечению нечем обрезаться: раньше iPhone срезал его квадратом */
+.chat-ava.general { background: none; }
+.chat-ava.general svg { width: 100%; height: 100%; display: block; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.chat-ava.general .halo2 { stroke: #ff4fd8; stroke-width: 5; opacity: .14; }
+.chat-ava.general .halo1 { stroke: #ff4fd8; stroke-width: 2.6; opacity: .35; }
+.chat-ava.general .disc { fill: #120d1c; stroke: #ff4fd8; stroke-width: 1.8; }
+.chat-ava.general .core { stroke: #ffe3f9; stroke-width: 2.1; }
+.chat-ava.general .glow1 { stroke: #ff4fd8; stroke-width: 4; opacity: .5; }
+.chat-ava.general .glow2 { stroke: #ff4fd8; stroke-width: 6.5; opacity: .18; }
+/* «К» изредка мигает, как перегорающая вывеска */
+.chat-ava.general .letter { animation: sign-flicker 7s linear infinite; }
+@keyframes sign-flicker {
+  0%, 90%, 92.5%, 96%, 100% { opacity: 1; }
+  91%, 94% { opacity: .3; }
+}
 .chat-ava.group { background: linear-gradient(135deg, var(--accent-2), #8c5aff); }
 
 /* Список чатов */
@@ -728,7 +774,7 @@ body.in-chat { padding-bottom: 0; }
 .msgs-in .bubble { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 
 /* Анимации сообщений */
-.msg.new { animation: msg-in .4s cubic-bezier(.2, 1.3, .4, 1) both; }
+.msg.new { animation: msg-in .3s cubic-bezier(.2, .8, .3, 1) both; }   /* без «пружины» — спокойно встаёт на место */
 .msg.mine.new .bubble { animation: glow-pulse 1.2s ease; }
 .msg.pending { opacity: .55; }
 .msg.pending .bubble { background: linear-gradient(100deg, #8a3cff 30%, #d63ab4 50%, #8a3cff 70%); background-size: 250% 100%; animation: shimmer 1.2s linear infinite; }
@@ -736,7 +782,10 @@ body.in-chat { padding-bottom: 0; }
 .m-fail { display: block; font-size: 12px; color: var(--danger); }
 .msg.bye { animation: bye .28s ease forwards; }
 .msg.flash .bubble { animation: flash 1.2s ease; }
-@keyframes msg-in { from { opacity: 0; transform: translateY(16px) scale(.92); } }
+@keyframes msg-in { from { opacity: 0; transform: translateY(12px) scale(.98); } }
+/* Своё отправленное: мягко поднимается на место. Только прозрачность и сдвиг — их рисует видеокарта, ничего не перестраивается */
+.msg.sent { animation: msg-sent .26s cubic-bezier(.2, .8, .3, 1) both; }
+@keyframes msg-sent { from { opacity: 0; transform: translateY(10px); } }
 @keyframes flash { 0%, 100% { box-shadow: none; } 30% { box-shadow: 0 0 0 3px var(--accent-2), 0 0 26px rgba(62, 230, 255, .7); } }
 
 /* Поле ввода */
@@ -982,15 +1031,79 @@ body.viewer-open { overflow: hidden; }
 @keyframes confetti-fall { to { transform: translate(var(--x, 0), 105vh) rotate(var(--r, 360deg)); opacity: .9; } }
 
 /* Топ месяца */
-.noms { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
-.nom { display: flex; gap: 12px; align-items: center; padding: 16px; background: var(--panel); border-radius: 14px; text-decoration: none; border: 1px solid var(--line); transition: border-color .2s, box-shadow .2s; animation: rise .45s ease both; }
-.nom:hover { border-color: var(--accent-2); box-shadow: var(--glow-2); }
-.nom .t { display: block; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 700; }
-.nom b { display: block; font-size: 17px; }
-.nom span:not(.t):not(.ava) { color: var(--muted); font-size: 13px; }
-.nom.main { grid-column: 1 / -1; border-color: var(--accent); background: linear-gradient(120deg, rgba(255, 79, 216, .22), rgba(62, 230, 255, .08) 60%, var(--panel)); box-shadow: var(--glow); }
-.nom.main .t { color: var(--accent); }
-.nom.main b { font-family: var(--font-logo); font-weight: 400; font-size: 22px; text-shadow: 0 0 14px rgba(255, 79, 216, .6); }
+/* ---------- «Топ»: награды месяца — коллекционные карточки ----------
+   Листаются свайпом (прилипают по центру), нажатие переворачивает. --nc — неон награды */
+/* min-width: 0 — иначе длинная лента карточек раздувала колонку страницы, и всё уезжало вправо */
+.awards { min-width: 0; }
+.aw-wrap { position: relative; min-width: 0; margin: 0 -16px; }
+.aw-track {
+  display: flex; gap: 16px; overflow-x: auto; scroll-snap-type: x mandatory; overscroll-behavior-x: contain;
+  padding: 22px calc(50% - min(37vw, 145px)) 18px; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  /* Края ленты плавно растворяются, а не обрезают карточки резкой линией */
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 16%, #000 84%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 16%, #000 84%, transparent);
+}
+.aw-track::-webkit-scrollbar { display: none; }
+.aw {
+  flex: none; width: min(74vw, 290px); aspect-ratio: 3 / 4; scroll-snap-align: center; perspective: 1100px; cursor: pointer;
+  -webkit-tap-highlight-color: transparent; outline: none;
+  scale: .88; opacity: .5; transition: scale .35s ease, opacity .35s ease;
+  animation: aw-deal .75s cubic-bezier(.2, 1.2, .3, 1) both; animation-delay: calc(var(--i, 0) * .12s);
+}
+.aw.cur { scale: 1; opacity: 1; }
+.aw:focus-visible .aw-face { outline: 2px solid var(--nc); outline-offset: 3px; }
+@keyframes aw-deal { from { opacity: 0; transform: translateY(70px) rotate(-8deg); } }
+.aw-in { position: relative; width: 100%; height: 100%; transform-style: preserve-3d; transition: transform .75s cubic-bezier(.3, 1.3, .4, 1); }
+.aw.flipped .aw-in { transform: rotateY(180deg); }
+.aw-face {
+  position: absolute; inset: 0; border-radius: 20px; overflow: hidden;
+  -webkit-backface-visibility: hidden; backface-visibility: hidden;
+  display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 18px 16px;
+  border: 2px solid var(--nc);
+  background: radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--nc) 32%, #15111f), #0e0b16 72%);
+  box-shadow: 0 0 22px color-mix(in srgb, var(--nc) 45%, transparent), inset 0 0 30px color-mix(in srgb, var(--nc) 14%, transparent);
+}
+.aw-back { transform: rotateY(180deg); }
+/* Голографический блик, как у коллекционной карты (только у той, что в центре) */
+.aw-front::after {
+  content: ""; position: absolute; inset: -50%; pointer-events: none;
+  background: linear-gradient(115deg, transparent 40%, rgba(255, 255, 255, .16) 47%, color-mix(in srgb, var(--nc) 35%, transparent) 52%, transparent 60%);
+  transform: translateX(-60%); animation: aw-sheen 4.5s ease-in-out infinite;
+}
+.aw:not(.cur) .aw-front::after { animation: none; opacity: 0; }
+@keyframes aw-sheen { 0%, 35% { transform: translateX(-60%); } 75%, 100% { transform: translateX(60%); } }
+.aw-no { position: absolute; top: 12px; left: 14px; font-size: 11px; color: var(--muted); letter-spacing: .08em; }
+.aw-ico { font-size: 46px; line-height: 1; margin-top: 14px; filter: drop-shadow(0 0 12px var(--nc)); }
+.aw.cur .aw-ico { animation: aw-float 3s ease-in-out infinite; }
+@keyframes aw-float { 50% { transform: translateY(-5px) rotate(-5deg); } }
+.aw-title { font-family: var(--font-logo); font-size: 15px; text-align: center; color: #fff; letter-spacing: .03em; text-shadow: 0 0 10px var(--nc); }
+.aw-ava { margin-top: auto; }
+.aw-ava .ava.big { width: 96px; height: 96px; font-size: 38px; box-shadow: 0 0 0 3px #0e0b16, 0 0 0 5px var(--nc), 0 0 26px var(--nc); }
+.aw-none { display: grid; place-items: center; width: 96px; height: 96px; border-radius: 50%; border: 2px dashed var(--nc); color: var(--nc); font-size: 40px; font-weight: 800; }
+.aw-name { font-size: 22px; font-weight: 800; text-align: center; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aw-val { font-size: 14px; color: var(--muted); }
+.aw-val b { font-family: var(--font-logo); font-weight: 400; font-size: 20px; color: #fff; }
+.aw-hint { margin-top: auto; font-size: 11px; color: var(--muted); letter-spacing: .06em; opacity: 0; transition: opacity .3s; }
+.aw.cur .aw-hint { opacity: 1; }
+/* Оборот: кто был рядом и за что награда */
+.aw-list { list-style: none; margin: 6px 0 0; padding: 0; width: 100%; display: grid; gap: 6px; }
+.aw-list li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 10px; background: rgba(255, 255, 255, .04); border: 1px solid transparent; }
+.aw-list li.win { background: color-mix(in srgb, var(--nc) 20%, transparent); border-color: var(--nc); }
+.aw-list .ava { width: 26px; height: 26px; font-size: 11px; }
+.aw-place { width: 16px; font-family: var(--font-logo); font-size: 13px; color: var(--nc); text-align: center; }
+.aw-who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.aw-list b { font-family: var(--font-logo); font-weight: 400; font-size: 14px; }
+.aw-empty { margin: auto 0; color: var(--muted); font-size: 14px; text-align: center; }
+.aw-rule { margin: auto 0 0; font-size: 12px; line-height: 1.4; color: var(--muted); text-align: center; }
+.aw-link { font-size: 13px; font-weight: 700; color: var(--nc); text-decoration: none; }
+.aw-dots { display: flex; justify-content: center; gap: 6px; }
+.aw-dots i { width: 6px; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, .3); transition: width .3s, background .3s, box-shadow .3s; }
+.aw-dots i.on { width: 18px; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+/* Стрелки — только на компьютере, на телефоне листают пальцем */
+.aw-arrow { position: absolute; top: 50%; z-index: 2; width: 42px; height: 42px; margin-top: -21px; border-radius: 50%; border: 1px solid var(--line); background: rgba(14, 11, 22, .8); color: #fff; font-size: 24px; line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0 0 3px; }
+.aw-arrow:hover { border-color: var(--accent); box-shadow: var(--glow); }
+.aw-arrow.prev { left: 24px; } .aw-arrow.next { right: 24px; }
+@media (max-width: 700px) { .aw-arrow { display: none; } }
 
 /* Ползунок громкости: розовая заливка до бегунка */
 .vol { gap: 8px; }
@@ -1290,6 +1403,46 @@ body.kb-open .pv-sheet { padding-bottom: 8px; }
 @keyframes rise { from { opacity: 0; transform: translateY(14px) scale(.98); } }
 @keyframes zoom { from { opacity: 0; transform: scale(.94); } }
 @keyframes pop { 40% { transform: scale(1.25); } }
+
+/* ---------- Эффекты v87 ---------- */
+
+/* Посты выплывают снизу, когда до них долистываешь (там, где браузер это умеет; где нет — как раньше) */
+@supports (animation-timeline: view()) {
+  .post { animation: post-reveal linear both; animation-timeline: view(); animation-range: entry 0% entry 40%; animation-delay: 0s; }
+}
+@keyframes post-reveal { from { opacity: 0; transform: translateY(46px) scale(.95); } }
+
+/* Параллакс обложки: --px от 0 до 1 ставит app.js при прокрутке */
+.cover-slide { translate: 0 calc(var(--px, 0) * 38%); }
+.cover::before { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: #0b0912; opacity: calc(var(--px, 0) * .7); }
+.cover-in { opacity: calc(1 - var(--px, 0) * 1.4); translate: 0 calc(var(--px, 0) * -40px); }
+
+/* Живая реакция друга: эмодзи с именем всплывает над кнопкой и улетает */
+.live-react { position: fixed; z-index: 90; pointer-events: none; display: grid; justify-items: center; gap: 2px; transform: translate(-50%, 0); animation: live-up 2.1s cubic-bezier(.2, .8, .3, 1) forwards; }
+.live-react i { font-style: normal; font-size: 34px; line-height: 1; filter: drop-shadow(0 0 10px rgba(255, 79, 216, .7)); }
+.live-react b { font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px; background: rgba(11, 9, 18, .85); border: 1px solid rgba(255, 79, 216, .5); color: #ffe6fb; white-space: nowrap; }
+@keyframes live-up {
+  0% { opacity: 0; transform: translate(-50%, 10px) scale(.4); }
+  15% { opacity: 1; transform: translate(-50%, -22px) scale(1.15); }
+  30% { transform: translate(-50%, -32px) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -150px) scale(.9); }
+}
+
+/* «Печатает» внизу переписки: аватарка и пузырь с тремя прыгающими неоновыми точками */
+.typing-bubble { display: flex; align-items: flex-end; width: 100%; max-width: 760px; margin: 0 auto; padding: 8px 0 4px; animation: msg-in .35s cubic-bezier(.2, 1.3, .4, 1) both; transition: opacity .2s, transform .2s; }
+.typing-bubble.out { opacity: 0; transform: translateY(6px) scale(.92); }
+.tb-avas { display: flex; }
+.tb-avas .ava { width: 28px; height: 28px; font-size: 12px; margin-right: -9px; box-shadow: 0 0 0 2px var(--bg); }
+.tb-dots { display: inline-flex; align-items: center; gap: 5px; height: 36px; padding: 0 14px; margin-left: 16px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 18px 18px 18px 6px; }
+.tb-dots i { width: 8px; height: 8px; border-radius: 50%; background: var(--uc, var(--accent-2)); box-shadow: 0 0 8px var(--uc, var(--accent-2)); animation: tb-jump 1.2s ease-in-out infinite; }
+.tb-dots i:nth-child(2) { animation-delay: .15s; }
+.tb-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes tb-jump { 0%, 60%, 100% { transform: translateY(0); opacity: .45; } 30% { transform: translateY(-6px); opacity: 1; } }
+
+/* Блик по только что отправленному пузырю */
+.bubble.shine::after { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background: linear-gradient(110deg, transparent 35%, rgba(255, 255, 255, .5) 50%, transparent 65%) no-repeat; background-size: 250% 100%; animation: shine 1s ease .3s both; }
+@keyframes shine { from { background-position: 130% 0; } to { background-position: -30% 0; } }
+
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

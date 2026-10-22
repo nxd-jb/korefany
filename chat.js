@@ -116,7 +116,7 @@ async function loadChats() {
     sb.from("chats").select("*"),
     sb.from("chat_members").select("*"),
     sb.from("chat_reads").select("*"),   // свои и чужие отметки «прочитано» во всех моих чатах
-    sb.from("messages").select("id, chat_id, author, text, image_path, audio_path, poll, created_at").order("created_at", { ascending: false }).limit(500),
+    sb.from("messages").select("*").order("created_at", { ascending: false }).limit(500),
     sb.from("chat_mutes").select("chat_id").eq("user_id", me())
   ]);
   if (c.error) { chat.ready = false; return; }
@@ -144,7 +144,7 @@ async function loadChats() {
   // ни одного сообщения из тихой лички, и в списке у неё было бы «Сообщений пока нет». Добираем отдельно
   if ((msg.data || []).length >= 500) {
     const missing = chat.list.filter(x => !chat.last[x.id]);
-    const got = await Promise.all(missing.map(x => sb.from("messages").select("id, chat_id, author, text, image_path, audio_path, poll, created_at")
+    const got = await Promise.all(missing.map(x => sb.from("messages").select("*")
       .eq("chat_id", x.id).order("created_at", { ascending: false }).limit(1).maybeSingle()));
     got.forEach(r => { if (r.data) chat.last[r.data.chat_id] = r.data; });
   }
@@ -198,7 +198,18 @@ function chatTitle(c) {
   return nameOf(otherIn(c));
 }
 function chatAvatar(c) {
-  if (c.kind === "general") return `<span class="ava chat-ava general">К</span>`;
+  // «К» нарисована линиями, а не буквой шрифта: у шрифта логотипа свои отступы, и буква стояла не по центру.
+  // Свечение — те же линии, только шире и прозрачнее (без фильтров, чтобы iPhone ничего не обрезал)
+  // Весь значок — круг, неоновое кольцо, свечение и «К» — один SVG: он чёткий на любом экране
+  // (градиент с резкими краями на iPhone рисовался «лесенкой»)
+  if (c.kind === "general") return `<span class="ava chat-ava general" aria-label="Общий чат"><svg viewBox="0 0 48 48" aria-hidden="true">
+    <circle class="halo2" cx="24" cy="24" r="21"/><circle class="halo1" cx="24" cy="24" r="19.6"/>
+    <circle class="disc" cx="24" cy="24" r="18"/>
+    <g class="letter" transform="translate(12 12)">
+      <path class="glow2" d="M8 6v12M8 12.2 15.8 6M10.9 10 16.2 18"/>
+      <path class="glow1" d="M8 6v12M8 12.2 15.8 6M10.9 10 16.2 18"/>
+      <path class="core" d="M8 6v12M8 12.2 15.8 6M10.9 10 16.2 18"/>
+    </g></svg></span>`;
   if (c.kind === "direct") return avatar(otherIn(c));
   const t = (c.title || "Г").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
   return `<span class="ava chat-ava group">${esc(t)}</span>`;
@@ -339,7 +350,7 @@ async function viewChat(id) {
   ]);
   chat.reacts = r.data || [];
   chat.votes = v.data || [];
-  await chatSigned(chat.messages.flatMap(x => [x.image_path, x.audio_path]));
+  await chatSigned(msgFiles(chat.messages));
 
   // Первое непрочитанное чужое сообщение — над ним будет полоска «Новые сообщения»
   const lastRead = chat.reads[id];
@@ -347,7 +358,8 @@ async function viewChat(id) {
 
   shell("chats", `<div class="chat-layout">
     <aside class="chat-side">${chatListHtml(id)}</aside>
-    <section class="chat-main">
+    <section class="chat-main" style="${chatTheme(c)}">
+      <div class="chat-bg" aria-hidden="true"><i></i><i></i><i></i></div>
       <header class="chat-head">
         <a href="#/chats" class="btn back" aria-label="Ко всем чатам">←</a>
         ${c.kind === "direct" ? `<a href="#/p/${otherIn(c)}" class="ch-who">` : `<div class="ch-who" role="button" tabindex="0" data-members title="Участники и кто в сети">`}
@@ -401,9 +413,17 @@ async function viewChat(id) {
   markRead(id);
 }
 
+// Цвет фона переписки: в личке — неон собеседника (тот, что он выбрал в профиле),
+// в общем чате — розовый с голубым, как весь сайт, в группах — фиолетовый
+function chatTheme(c) {
+  const n = c.kind === "direct" ? colorOf(otherIn(c)) : c.kind === "group" ? NEON.violet : { a: "#ff4fd8", b: "#3ee6ff" };
+  return `--ca:${n.a};--cb:${n.b}`;
+}
+
 function chatLeave() {
   // Ушли из чата во время записи голосового — запись выбрасываем и выключаем микрофон
   if (rec) stopRecording(false);
+  stopTyping();
   closeMembers(true);
   chat.open = null; chat.replyTo = null; chat.editing = null;
   document.body.classList.remove("in-chat", "chats-page");
@@ -556,13 +576,18 @@ function wireComposer(c) {
   file.onchange = async () => { const f = file.files[0]; file.value = ""; if (f) await sendMessage(c, { file: f }); };
 
   wireVoice(c, send);
+  // Нажатие на «отправить» не забирает курсор из поля. Иначе на iPhone клавиатура на миг пряталась
+  // и выезжала обратно — и вся переписка прыгала вверх-вниз
+  const keepFocus = e => { if (!send.classList.contains("mic-mode")) e.preventDefault(); };
+  send.addEventListener("mousedown", keepFocus);
+  send.addEventListener("touchstart", e => { if (!send.classList.contains("mic-mode")) { e.preventDefault(); submit(); } }, { passive: false });
 
-  const submit = async () => {
+  const submit = () => {
     const text = ta.value.trim(); if (!text) return;
     if (chat.editing) return saveEdit(text);
     ta.value = ""; refresh();
-    await sendMessage(c, { text });
-    ta.focus();
+    ta.focus();   // сразу, а не после ответа сервера
+    sendMessage(c, { text });
   };
 }
 
@@ -753,10 +778,13 @@ function toggleVoice(id, seekFrac = null) {
     el?.classList.remove("playing");
   }
 }
+// Все файлы сообщений, на которые нужны ссылки
+const msgFiles = list => list.flatMap(x => [x.image_path, x.audio_path]);
 // Пока открыт чат, раз в 5 минут освежаем ссылки на фото и голосовые (живут час)
 setInterval(() => {
-  if (chat.open && !document.hidden) chatSigned(chat.messages.flatMap(x => [x.image_path, x.audio_path])).catch(() => {});
+  if (chat.open && !document.hidden) chatSigned(msgFiles(chat.messages)).catch(() => {});
 }, 5 * 60e3);
+
 // Файл не открылся (формат не тот или ссылка не пустила) — говорим об этом, а не молчим
 voicePlayer.addEventListener("error", () => {
   if (!voicePlaying) return;
@@ -944,7 +972,7 @@ async function jumpToMessage(id, createdAt) {
       pollIds.length ? sb.from("poll_votes").select("*").in("message_id", pollIds) : { data: [] }
     ]);
     chat.reacts = r.data || []; chat.votes = v.data || [];
-    await chatSigned(chat.messages.flatMap(x => [x.image_path, x.audio_path]));
+    await chatSigned(msgFiles(chat.messages));
     document.getElementById("msgsIn").innerHTML = renderMessages(c);
     paintTicks();
     el = document.querySelector(`[data-mid="${id}"]`);
@@ -956,19 +984,19 @@ async function jumpToMessage(id, createdAt) {
 }
 
 async function sendMessage(c, { text = null, file = null, audio = null, duration = null, poll = null }) {
+  if (text && !file && !audio && !poll) return sendText(c, text);
   const box = document.getElementById("msgs");
   const replyTo = chat.replyTo;
   setReply(null);
-  // Пока отправляется — полупрозрачный пузырь с мерцанием
+  // Фото, голосовое или опрос, пока загружается, — плашка «Отправляю...»
   const temp = document.createElement("div");
-  temp.className = "msg mine pending";
-  const what = file ? "📷 Отправляю фото..." : audio ? "🎤 Отправляю голосовое..." : poll ? "📊 Отправляю опрос..." : null;
-  temp.innerHTML = `<div class="m-body"><div class="bubble">${what ? `<div class="m-img-pending">${what}</div>` : `<p class="m-text">${esc(text)}<span class="m-meta"><time>${timeText(new Date().toISOString())}</time><i class="tick">🕓</i></span></p>`}</div></div>`;
+  temp.className = "msg mine pending sent";
+  const what = file ? "📷 Отправляю фото..." : audio ? "🎤 Отправляю голосовое..." : "📊 Отправляю опрос...";
+  temp.innerHTML = `<div class="m-body"><div class="bubble"><div class="m-img-pending">${what}</div></div></div>`;
   const inner = document.getElementById("msgsIn");
   inner.querySelector(".msgs-empty")?.remove();
   inner.appendChild(temp);
   box.scrollTop = box.scrollHeight;
-  const flight = flyFromComposer(temp.querySelector(".bubble"));
 
   try {
     let image_path = null, audio_path = null;
@@ -992,11 +1020,8 @@ async function sendMessage(c, { text = null, file = null, audio = null, duration
     if (poll) row.poll = poll;
     const { data, error } = await sb.from("messages").insert(row).select().single();
     if (error) throw error;
-    // Сервер ответил быстрее, чем пузырь долетел — даём ему долететь. Но не дольше полсекунды:
-    // если приложение свернули, анимация замирает, а сообщение не должно зависнуть в «отправляется»
-    await Promise.race([flight, new Promise(r => setTimeout(r, 500))]);
     temp.remove();
-    addMessage(data, true);   // без второй анимации появления: пузырь уже прилетел
+    addMessage(data, true);   // без второй анимации появления
   } catch (err) {
     temp.classList.remove("pending");
     temp.classList.add("failed");
@@ -1012,17 +1037,45 @@ async function sendMessage(c, { text = null, file = null, audio = null, duration
   }
 }
 
-// Отправленный пузырь вылетает из поля ввода и встаёт на своё место, как в iMessage
-function flyFromComposer(bubble) {
-  const pill = document.querySelector("#composer .pill");
-  if (!bubble || !pill || matchMedia("(prefers-reduced-motion: reduce)").matches) return Promise.resolve();
-  const p = pill.getBoundingClientRect(), b = bubble.getBoundingClientRect();
-  if (!b.width) return Promise.resolve();
-  const dx = p.left + 10 - b.left, dy = p.top + p.height / 2 - (b.top + b.height / 2);
-  return bubble.animate([
-    { transform: `translate(${dx}px, ${dy}px) scale(.92)`, opacity: .5, transformOrigin: "left center" },
-    { transform: "none", opacity: 1, transformOrigin: "left center" }
-  ], { duration: 420, easing: "cubic-bezier(.2, .9, .25, 1.08)" }).finished.catch(() => {});
+// Текст отправляется без единого рывка: сообщение сразу встаёт в переписку уже настоящим —
+// с тем же id, под которым оно ляжет в базу (id придумываем сами). Пока база не ответила, вместо ✓ часики.
+// Когда ответила — меняются только часики, сам пузырь не перерисовывается и не заменяется
+async function sendText(c, text) {
+  const replyTo = chat.replyTo;
+  setReply(null);
+  const id = crypto.randomUUID();
+  chat.seen.add(id);   // эхо из живого канала его не продублирует
+  const m = { id, chat_id: c.id, author: me(), text, image_path: null, audio_path: null, poll: null, reply_to: replyTo, created_at: new Date().toISOString(), pending: true };
+  addMessage(m);
+  await deliverText(c, m);
+}
+async function deliverText(c, m) {
+  const el = () => document.querySelector(`[data-mid="${m.id}"]`);
+  const setTick = s => { const t = el()?.querySelector(`[data-tick="${m.id}"]`); if (t) { t.textContent = s; t.classList.remove("read"); } };
+  m.pending = true;
+  setTick("🕓");
+  let { data, error } = await sb.from("messages").insert({ id: m.id, chat_id: c.id, text: m.text, reply_to: m.reply_to }).select().single();
+  // Повтор после обрыва связи, а первая попытка на самом деле дошла: такой id уже есть — значит, отправлено
+  if (error?.code === "23505") ({ data, error } = await sb.from("messages").select("*").eq("id", m.id).single());
+  if (error) {
+    m.pending = "failed";
+    setTick("⚠");
+    const e = el(); if (!e) return;
+    e.classList.add("failed");
+    e.querySelector(".bubble").insertAdjacentHTML("beforeend", `<span class="m-fail">Не отправилось · нажми, чтобы повторить</span>`);
+    // Нажатие — ещё раз тем же сообщением, на том же месте
+    e.addEventListener("click", ev => {
+      ev.stopPropagation();
+      e.classList.remove("failed"); e.querySelector(".m-fail")?.remove();
+      deliverText(c, m);
+    }, { once: true, capture: true });
+    return;
+  }
+  delete m.pending;
+  Object.assign(m, data);   // время с сервера (на экране минута та же — ничего не трогаем)
+  chat.last[c.id] = m;
+  paintTicks();
+  refreshChatSide();
 }
 
 // Добавить сообщение в открытый чат (своё после отправки или чужое из живых обновлений)
@@ -1039,7 +1092,14 @@ function addMessage(m, quiet = false) {
   inner.querySelector(".msgs-empty")?.remove();
   // Новое сообщение продолжает блок — у предыдущего убираем «хвостик»
   if (sameRunAs(prev, m)) document.querySelector(`[data-mid="${prev.id}"]`)?.classList.remove("tail");
-  inner.insertAdjacentHTML("beforeend", msgHtml(m, prev, c, !quiet));
+  const mine = m.author === me();
+  inner.insertAdjacentHTML("beforeend", msgHtml(m, prev, c, !quiet && !mine));
+  // Своё: мягко поднимается на место (без пружины) и по пузырю один раз пробегает блик
+  if (mine) {
+    const el = inner.lastElementChild, b = el?.querySelector(".bubble");
+    if (!quiet) el?.classList.add("sent");
+    if (b) { b.classList.add("shine"); setTimeout(() => b.classList.remove("shine"), 1300); }
+  }
   if (nearBottom || m.author === me()) { box.scrollTop = box.scrollHeight; chat.atBottom = true; }
   else { chat.newBelow++; paintToBottom(); }   // листаешь историю — копим счётчик на кнопке «вниз»
   chat.last[m.chat_id] = m;
@@ -1052,7 +1112,7 @@ function addMessage(m, quiet = false) {
 function paintTicks() {
   const reads = Object.values(chat.otherReads || {});
   chat.messages.forEach(m => {
-    if (m.author !== me()) return;
+    if (m.author !== me() || m.pending) return;   // у отправляющегося — часики или ⚠, их не трогаем
     const el = document.querySelector(`[data-tick="${m.id}"]`); if (!el) return;
     const read = reads.some(t => t >= m.created_at);
     if (read && !el.classList.contains("read")) { el.textContent = "✓✓"; el.classList.add("read"); }
@@ -1142,7 +1202,7 @@ function wireSwipeReply() {
     setTimeout(() => { done.style.transition = ""; done.classList.remove("swiping"); }, 260);
     if (go) {
       const m = chat.messages.find(x => x.id === done.dataset.mid);
-      if (m) { setReply(m); navigator.vibrate?.(12); }
+      if (m && !m.pending) { setReply(m); navigator.vibrate?.(12); }
     }
     el = null;
   });
@@ -1291,6 +1351,9 @@ document.addEventListener("click", async e => {
 // Меню сообщения: веер реакций, «Ответить», «Копировать»... toggle — нажатие ещё раз закрывает
 function openMsgMenu(bubble, toggle = false) {
   const msg = bubble.closest(".msg"), box = document.getElementById("msgs");
+  // Сообщение ещё отправляется (или не отправилось) — в базе его пока нет: реакция, ответ,
+  // правка или удаление сломались бы. Меню у него не открываем
+  if (chat.messages.find(x => x.id === msg?.dataset.mid)?.pending) return;
   // Обычно реакции над сообщением, а список действий под ним. Если места не хватает —
   // у верхних сообщений всё уходит вниз (below), у нижних — вверх (up)
   const b = bubble.getBoundingClientRect(), r = box.getBoundingClientRect();
@@ -1513,18 +1576,47 @@ function sendTyping(chatId) {
   liveChannel.send({ type: "broadcast", event: "typing", payload: { chat: chatId, user: me() } });
 }
 
+// Кто сейчас печатает в открытом чате: id → таймер (через 3,5 с тишины человек пропадает)
+const typingNow = new Map();
 function chatOnTyping(p) {
   if (!p || p.user === me() || p.chat !== chat.open) return;
-  const el = document.getElementById("chSub"); if (!el) return;
-  if (!el.dataset.orig) el.dataset.orig = el.textContent;
-  el.classList.add("typing");
-  el.innerHTML = `${esc(nameOf(p.user))} печатает<i></i><i></i><i></i>`;
-  clearTimeout(typingTimer);
-  typingTimer = setTimeout(stopTyping, 3500);
+  clearTimeout(typingNow.get(p.user));
+  typingNow.set(p.user, setTimeout(() => stopTyping(p.user), 3500));
+  paintTyping();
 }
-function stopTyping() {
-  const el = document.getElementById("chSub");
-  if (el && el.dataset.orig) { el.textContent = el.dataset.orig; el.classList.remove("typing"); delete el.dataset.orig; }
+// user — убрать одного (пришло его сообщение или он замолчал), без него — всех
+function stopTyping(user) {
+  if (user) { clearTimeout(typingNow.get(user)); typingNow.delete(user); }
+  else { typingNow.forEach(t => clearTimeout(t)); typingNow.clear(); }
+  paintTyping();
+}
+// В шапке — «Миша печатает...», а внизу переписки — пузырь с тремя прыгающими неоновыми точками и аватаркой
+function paintTyping() {
+  const ids = [...typingNow.keys()];
+  const sub = document.getElementById("chSub");
+  if (sub) {
+    if (ids.length) {
+      if (!sub.dataset.orig) sub.dataset.orig = sub.textContent;
+      sub.classList.add("typing");
+      sub.innerHTML = `${esc(ids.length > 1 ? `${nameOf(ids[0])} и ещё ${ids.length - 1}` : nameOf(ids[0]))} печата${ids.length > 1 ? "ют" : "ет"}<i></i><i></i><i></i>`;
+    } else if (sub.dataset.orig) { sub.textContent = sub.dataset.orig; sub.classList.remove("typing"); delete sub.dataset.orig; }
+  }
+  const box = document.getElementById("msgs"); if (!box) return;
+  let tb = document.getElementById("typingBubble");
+  if (!ids.length) {
+    if (tb && !tb.classList.contains("out")) { tb.classList.add("out"); setTimeout(() => tb.remove(), 220); }
+    return;
+  }
+  const wasBottom = chat.atBottom !== false;
+  if (!tb || tb.classList.contains("out")) {
+    tb?.remove();
+    tb = document.createElement("div");
+    tb.id = "typingBubble"; tb.className = "typing-bubble";
+    box.appendChild(tb);   // после #msgsIn: новые сообщения встают выше пузыря
+  }
+  tb.innerHTML = `<span class="tb-avas">${ids.slice(0, 3).map(id => avatar(id)).join("")}</span>
+    <span class="tb-dots" style="${ucStyle(ids[0])}"><i></i><i></i><i></i></span>`;
+  if (wasBottom) box.scrollTop = box.scrollHeight;
 }
 
 // ---------- Живые обновления (вызываются из app.js) ----------
@@ -1543,7 +1635,7 @@ function chatOnMessage(type, n, o) {
     if (n.author !== me() && !quiet) playMessageSound();
     chat.last[n.chat_id] = n;
     if (chat.open === n.chat_id) {
-      if (n.author !== me()) stopTyping();   // сообщение пришло — «печатает» больше не нужно
+      if (n.author !== me()) stopTyping(n.author);   // сообщение пришло — «печатает» у него больше не нужно
       addMessage(n);
       if (n.image_path) chatSigned([n.image_path]).then(() => {
         const img = document.querySelector(`[data-mid="${n.id}"] .m-img`); if (img) img.src = chatUrl(n.image_path);

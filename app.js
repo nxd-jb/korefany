@@ -329,6 +329,7 @@ function shell(active, inner) {
     </nav>`;
   if (typeof paintChatBadge === "function") paintChatBadge();
   moveNavIndicator();
+  countUp($app);
 }
 
 // Подсветка стартует с места, где была на прошлой странице, и плавно едет к новому пункту
@@ -402,6 +403,7 @@ async function viewFeed() {
     ${list.length ? `<div class="feed" id="feed"></div><div class="feed-more" id="feedMore"></div>`
       : `<div class="empty">Пока ничего нет. <a href="#/upload">Загрузи первое фото</a>, и с него начнётся история.</div>`}`);
   startCover();
+  wireParallax();
   if (!list.length) return;
   await appendPosts();
   // Когда долистали до низа — подгружаем следующие посты
@@ -534,7 +536,7 @@ async function coverHtml() {
   const dates = state.media.map(m => new Date(m.taken_at || m.created_at).getTime());
   const first = dates.length ? Math.min(...dates) : Date.now();
   const days = Math.max(1, Math.floor((Date.now() - first) / 864e5));
-  const stat = (n, forms) => `<div><b>${n}</b><span>${plural(n, forms)}</span></div>`;
+  const stat = (n, forms) => `<div><b data-count="${n}">${n}</b><span>${plural(n, forms)}</span></div>`;
   return `<section class="cover" id="cover">
     ${slides.map((m, i) => `<div class="cover-slide${i === 0 ? " on" : ""}" data-cover-open="${m.id}">
       <img class="cs-bg" src="${url(thumbPath(m)) || url(m.path)}" alt="">
@@ -671,7 +673,7 @@ function profileHero(p, actions = "", editable = false) {
   const uploaded = state.media.filter(m => m.owner === id);
   const upIds = new Set(uploaded.map(m => m.id)), saidIds = new Set(saidBy.map(q => q.id));
   const got = state.mr.filter(r => upIds.has(r.media_id)).length + state.qr.filter(r => saidIds.has(r.quote_id)).length;
-  const stat = (n, forms) => `<div><b>${n}</b><span>${plural(n, forms)}</span></div>`;
+  const stat = (n, forms) => `<div><b data-count="${n}">${n}</b><span>${plural(n, forms)}</span></div>`;
   const cover = p.cover_path && url(p.cover_path);
   const pq = p.pinned_quote && state.quotes.find(q => q.id === p.pinned_quote);
   return `<section class="phero" style="${ucStyle(id)}">
@@ -775,11 +777,16 @@ const plural = (n, [one, few, many]) => {
   return a > 10 && a < 20 ? many : b === 1 ? one : b >= 2 && b <= 4 ? few : many;
 };
 
+// color — неон карточки-награды в «Топе», rule — что считается (на обороте карточки)
 const NOMS = [
-  { key: "score", icon: "👑", title: "Корефан месяца", unit: ["очко", "очка", "очков"] },
-  { key: "uploads", icon: "📸", title: "Фотограф месяца", unit: ["загрузка", "загрузки", "загрузок"] },
-  { key: "tags", icon: "⭐", title: "Звезда месяца", unit: ["отметка", "отметки", "отметок"] },
-  { key: "laughs", icon: "😂", title: "Комик месяца", unit: ["😂", "😂", "😂"] }
+  { key: "score", icon: "👑", title: "Корефан месяца", unit: ["очко", "очка", "очков"], color: "#ff4fd8",
+    rule: "Очки: загрузки + отметки на фото + реакции на его фото + 😂 на его цитатах ×2" },
+  { key: "uploads", icon: "📸", title: "Фотограф месяца", unit: ["загрузка", "загрузки", "загрузок"], color: "#3ee6ff",
+    rule: "Больше всех загрузил фото и видео за месяц" },
+  { key: "tags", icon: "⭐", title: "Звезда месяца", unit: ["отметка", "отметки", "отметок"], color: "#ffd34f",
+    rule: "Чаще всех отмечен на фото за месяц" },
+  { key: "laughs", icon: "😂", title: "Комик месяца", unit: ["😂", "😂", "😂"], color: "#ff9f43",
+    rule: "Его цитаты собрали больше всех 😂 за месяц" }
 ];
 
 // Номер месяца: год × 12 + месяц, по местному времени
@@ -838,15 +845,45 @@ async function viewTop() {
   const best = monthMedia
     .map(x => ({ x, n: rcOf.get(x.id) || 0 }))
     .filter(o => o.n > 0).sort((a, b) => b.n - a.n).slice(0, 6).map(o => o.x);
-  const leader = key => leaderOf(stats, key);
 
-  const noms = NOMS.map((n, i) => {
-    const l = leader(n.key);
-    if (!l) return `<div class="nom${i === 0 ? " main" : ""}"><div><span class="t">${n.title}</span><b>Пока никого</b></div></div>`;
-    const v = l[1][n.key];
-    return `<a class="nom${i === 0 ? " main" : ""}" href="#/p/${l[0]}">${avatar(l[0], i === 0)}<div>
-      <span class="t">${n.title}</span><b>${esc(nameOf(l[0]))}</b><span>${v} ${plural(v, n.unit)}</span></div></a>`;
+  // Награды месяца — коллекционные карточки: листаются свайпом, нажатие переворачивает.
+  // Спереди победитель, на обороте — кто был рядом (топ-5) и за что дают награду
+  const rankOf = key => Object.entries(stats).filter(([id, v]) => v[key] > 0 && profile(id)).sort((a, b) => b[1][key] - a[1][key]);
+  const cards = NOMS.map((n, i) => {
+    const list = rankOf(n.key), l = list[0], v = l ? l[1][n.key] : 0;
+    const front = l
+      ? `<span class="aw-ava">${avatar(l[0], true)}</span>
+         <b class="aw-name">${esc(nameOf(l[0]))}</b>
+         <span class="aw-val"><b data-count="${v}">${v}</b> ${plural(v, n.unit)}</span>`
+      : `<span class="aw-ava aw-none">?</span><b class="aw-name">Пока никого</b><span class="aw-val">Награда ещё свободна</span>`;
+    const back = list.length
+      ? `<ol class="aw-list">${list.slice(0, 5).map(([id, s], k) => `<li${k === 0 ? ` class="win"` : ""}>
+          <span class="aw-place">${k + 1}</span>${avatar(id)}<span class="aw-who">${esc(nameOf(id))}</span><b>${s[n.key]}</b></li>`).join("")}</ol>`
+      : `<p class="aw-empty">В этом месяце тут ещё никого</p>`;
+    return `<div class="aw" data-aw="${i}" style="--nc:${n.color}; --i:${i}" tabindex="0" role="button" aria-label="${n.title}: перевернуть карточку">
+      <div class="aw-in">
+        <div class="aw-face aw-front">
+          <span class="aw-no">№${i + 1} / ${NOMS.length}</span>
+          <span class="aw-ico" aria-hidden="true">${n.icon}</span>
+          <span class="aw-title">${n.title}</span>
+          ${front}
+          <span class="aw-hint">Нажми — перевернуть</span>
+        </div>
+        <div class="aw-face aw-back">
+          <span class="aw-title">${n.icon} ${n.title}</span>
+          ${back}
+          <p class="aw-rule">${n.rule}</p>
+          ${l ? `<a class="aw-link" href="#/p/${l[0]}">Профиль победителя →</a>` : ""}
+        </div>
+      </div>
+    </div>`;
   }).join("");
+  const noms = `<div class="aw-wrap">
+      <button type="button" class="aw-arrow prev" data-aw-go="-1" aria-label="Предыдущая награда">‹</button>
+      <div class="aw-track" id="awTrack">${cards}</div>
+      <button type="button" class="aw-arrow next" data-aw-go="1" aria-label="Следующая награда">›</button>
+    </div>
+    <div class="aw-dots" id="awDots">${NOMS.map((_, i) => `<i class="${i === 0 ? "on" : ""}"></i>`).join("")}</div>`;
 
   shell("top", `
     <div class="head" style="justify-content:space-between">
@@ -857,10 +894,10 @@ async function viewTop() {
       </div>
     </div>
     ${state.reactsReady ? "" : `<div class="empty">Реакции ещё не включены. Нужно выполнить файл 03_reactions.sql в Supabase.</div>`}
-    <section><h2>Номинации</h2><div class="noms">${noms}</div>
-      <p class="msg" style="margin-top:10px">Очки корефана месяца: загрузки + отметки на фото + реакции на его фото + 😂 на его цитатах ×2</p></section>
+    <section class="awards"><h2>Награды месяца</h2>${noms}</section>
     <section><h2>Лучшие фото и видео</h2>${await grid(best, "В этом месяце ещё никто не ставил реакций. Открой любое фото и жми 😂 🔥 ❤️")}</section>`);
   state.current = best;
+  wireAwards();
 
   document.querySelectorAll("[data-tm]").forEach(b => b.onclick = () => {
     let mm = m + Number(b.dataset.tm), yy = y;
@@ -868,6 +905,45 @@ async function viewTop() {
     state.topMonth = { y: yy, m: mm };
     viewTop();
   });
+}
+
+// Карточки-награды: свайп листает (прилипают по центру), нажатие или Enter переворачивает,
+// точки снизу и стрелки по бокам (на компьютере) показывают, какая сейчас
+function wireAwards() {
+  const track = document.getElementById("awTrack"); if (!track) return;
+  const cards = [...track.querySelectorAll("[data-aw]")], dots = [...document.querySelectorAll("#awDots i")];
+  let cur = 0, t = null;
+  const current = () => {
+    const mid = track.scrollLeft + track.clientWidth / 2;
+    let best = 0, d = Infinity;
+    cards.forEach((c, i) => { const x = Math.abs(c.offsetLeft + c.offsetWidth / 2 - mid); if (x < d) { d = x; best = i; } });
+    return best;
+  };
+  const paint = () => {
+    cur = current();
+    dots.forEach((x, i) => x.classList.toggle("on", i === cur));
+    cards.forEach((c, i) => {
+      c.classList.toggle("cur", i === cur);
+      if (i !== cur) c.classList.remove("flipped");   // уехала в сторону — снова лицом
+    });
+  };
+  const go = i => {
+    const c = cards[Math.max(0, Math.min(cards.length - 1, i))];
+    track.scrollTo({ left: c.offsetLeft - (track.clientWidth - c.offsetWidth) / 2, behavior: "smooth" });
+  };
+  track.addEventListener("scroll", () => { clearTimeout(t); t = setTimeout(paint, 60); }, { passive: true });
+  cards.forEach((c, i) => {
+    const flip = e => {
+      if (e.target.closest("a")) return;
+      if (i !== cur) return go(i);   // нажал на соседнюю — сначала подъезжает к центру
+      c.classList.toggle("flipped");
+      navigator.vibrate?.(8);
+    };
+    c.addEventListener("click", flip);
+    c.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(e); } });
+  });
+  document.querySelectorAll("[data-aw-go]").forEach(b => b.onclick = () => go(cur + Number(b.dataset.awGo)));
+  paint();
 }
 
 function viewUpload() {
@@ -2075,6 +2151,62 @@ function onReact(type, n, o) {
   if (type === "INSERT") { if (state.mr.some(same)) return; state.mr.push(r); }
   else { const i = state.mr.findIndex(same); if (i < 0) return; state.mr.splice(i, 1); }
   paintReact("m", r.media_id, r.emoji);
+  if (type === "INSERT" && r.user_id !== me()) liveReact(r);
+}
+
+// Живые реакции: друг поставил реакцию на фото, которое у тебя сейчас на экране, —
+// над кнопкой всплывает его эмодзи с именем и улетает вверх
+function liveReact(r) {
+  const btns = [...document.querySelectorAll(`[data-react="m"][data-id="${r.media_id}"][data-emoji="${r.emoji}"]`)];
+  const btn = btns.find(b => { const x = b.getBoundingClientRect(); return x.width && x.bottom > 0 && x.top < innerHeight; });
+  if (!btn || document.hidden) return;
+  const x = btn.getBoundingClientRect();
+  const s = document.createElement("span");
+  s.className = "live-react";
+  s.innerHTML = `<i>${EMOJI[r.emoji] || "✨"}</i><b>${esc(nameOf(r.user_id))}</b>`;
+  s.style.left = x.left + x.width / 2 + "px"; s.style.top = x.top + "px";
+  document.body.appendChild(s);
+  setTimeout(() => s.remove(), 2200);
+}
+
+// Цифры набегают от нуля: статистика на обложке и в профиле, очки в «Топе».
+// Один раз на число — когда страница перерисовывается после обновления данных, заново не считают
+const countedOnce = new Set();
+function countUp(root = document) {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  root.querySelectorAll("[data-count]").forEach((el, i) => {
+    const n = Number(el.dataset.count), key = `${location.hash}|${i}|${n}`;
+    if (!(n >= 2) || countedOnce.has(key)) return;
+    countedOnce.add(key);
+    const start = performance.now(), dur = Math.min(1400, 600 + n * 8);
+    const step = t => {
+      const k = Math.min(1, (t - start) / dur), e = 1 - Math.pow(1 - k, 3);   // быстро в начале, плавно к концу
+      el.textContent = Math.round(n * e);
+      if (k < 1 && el.isConnected) requestAnimationFrame(step); else el.textContent = n;
+    };
+    el.textContent = "0";
+    requestAnimationFrame(step);
+    setTimeout(() => { el.textContent = n; }, dur + 300);   // если вкладка была скрыта и кадры не шли — всё равно покажем число
+  });
+}
+
+// Параллакс обложки ленты: при прокрутке фото уезжает медленнее страницы и темнеет, надпись тает
+let parallaxOn = false;
+function wireParallax() {
+  if (parallaxOn || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  parallaxOn = true;
+  let queued = false;
+  addEventListener("scroll", () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      const cover = document.getElementById("cover"); if (!cover) return;
+      const r = cover.getBoundingClientRect();
+      if (r.bottom < -50 || r.top > innerHeight) return;
+      cover.style.setProperty("--px", Math.min(1, Math.max(0, -r.top / r.height)).toFixed(3));
+    });
+  }, { passive: true });
 }
 
 // Кто-то добавил фото или цитату: показываем плашку, чтобы не дёргать страницу под рукой.
