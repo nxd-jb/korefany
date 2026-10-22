@@ -22,21 +22,24 @@ const chat = {
   firstUnread: null, // открытый чат: id первого непрочитанного (полоска «Новые сообщения»)
   newBelow: 0,       // сколько новых пришло, пока листаешь историю (счётчик на кнопке «вниз»)
   online: new Set(), // кто сейчас на сайте
+  othersRead: {},    // chat_id -> докуда дочитал кто-то из собеседников (галочки ✓✓ в списке чатов)
+  muted: new Set(),  // чаты, где я выключил уведомления (таблица chat_mutes)
+  mutesReady: true,  // false, если 13_chat_mutes.sql ещё не выполнен
   votes: []          // голоса в опросах открытого чата: { message_id, user_id, option }
 };
 
 // ---------- Звук нового сообщения ----------
 // Файл sounds/message.mp3. Играет, когда пишет кто-то другой; выключается в профиле.
+// Звук играет через Web Audio, а не через <audio>: обычный аудиоплеер iPhone считает музыкой
+// и показывает на заблокированном экране и в Пункте управления плеер «Корефаны» с перемоткой.
+// Web Audio для коротких звуков такого плеера не создаёт
 
-const msgSound = new Audio("sounds/message.mp3");
-msgSound.preload = "auto";
-let lastSoundAt = 0;
+let lastSoundAt = 0, soundBuf = null, soundLoading = null;
 
 function soundOn() { try { return localStorage.getItem("korefany-sound") !== "off"; } catch (e) { return true; } }
 function setSoundOn(on) { try { localStorage.setItem("korefany-sound", on ? "on" : "off"); } catch (e) {} }
 
-// Громкость 0…1, по умолчанию 40%. Своя на каждом устройстве.
-// iPhone не даёт менять громкость у самого <audio>, поэтому звук идёт через Web Audio с регулятором (GainNode)
+// Громкость 0…1, по умолчанию 40%. Своя на каждом устройстве. Регулятор громкости — GainNode
 let audioCtx = null, gainNode = null;
 function soundVolume() {
   try { const v = parseFloat(localStorage.getItem("korefany-volume")); return isNaN(v) ? 0.4 : v; } catch (e) { return 0.4; }
@@ -46,9 +49,7 @@ function setSoundVolume(v) {
   applyVolume();
 }
 function applyVolume() {
-  const v = soundVolume();
-  if (gainNode) { msgSound.volume = 1; gainNode.gain.value = v; }
-  else msgSound.volume = Math.min(1, v);
+  if (gainNode) gainNode.gain.value = soundVolume();
 }
 function setupAudio() {
   if (audioCtx) return;
@@ -56,30 +57,49 @@ function setupAudio() {
   try {
     audioCtx = new AC();
     gainNode = audioCtx.createGain();
-    audioCtx.createMediaElementSource(msgSound).connect(gainNode).connect(audioCtx.destination);
-  } catch (e) { audioCtx = null; gainNode = null; }
+    gainNode.connect(audioCtx.destination);
+  } catch (e) { audioCtx = null; gainNode = null; return; }
   applyVolume();
+  loadSound();
 }
-applyVolume();
+// Звук скачивается и раскладывается в память один раз
+function loadSound() {
+  if (soundBuf || soundLoading || !audioCtx) return soundLoading;
+  soundLoading = fetch("sounds/message.mp3").then(r => r.arrayBuffer())
+    // старые iPhone знают только вариант decodeAudioData с функциями, а не с обещанием
+    .then(data => new Promise((ok, no) => audioCtx.decodeAudioData(data, ok, no)))
+    .then(buf => { soundBuf = buf; return buf; })
+    .catch(() => { soundLoading = null; });
+  return soundLoading;
+}
 
-function playMessageSound(force = false) {
+async function playMessageSound(force = false) {
   if (!force && !soundOn()) return;
   const now = Date.now();
   if (!force && now - lastSoundAt < 1500) return;   // пачка сообщений — один звук, а не трещотка
   lastSoundAt = now;
-  if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
-  msgSound.currentTime = 0;
-  msgSound.play().catch(() => {});
+  setupAudio();
+  if (!audioCtx) return;
+  if (audioCtx.state === "suspended") audioCtx.resume().catch(() => {});
+  const buf = soundBuf || await loadSound();
+  if (!buf) return;
+  const src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(gainNode);
+  src.start();
 }
 
 // iPhone и браузеры разрешают звук только после первого нажатия на странице.
-// Поэтому при первом касании тихо «будим» звук, чтобы потом он играл сам.
+// Поэтому при первом касании «будим» Web Audio: проигрываем беззвучный кусочек в одну выборку
 function unlockSound() {
   setupAudio();
-  audioCtx?.resume?.();
-  msgSound.muted = true;
-  msgSound.play().then(() => { msgSound.pause(); msgSound.currentTime = 0; msgSound.muted = false; })
-    .catch(() => { msgSound.muted = false; });
+  if (!audioCtx) return;
+  audioCtx.resume?.().catch?.(() => {});
+  try {
+    const s = audioCtx.createBufferSource();
+    s.buffer = audioCtx.createBuffer(1, 1, 22050);
+    s.connect(audioCtx.destination); s.start(0);
+  } catch (e) {}
 }
 document.addEventListener("pointerdown", unlockSound, { once: true });
 document.addEventListener("keydown", unlockSound, { once: true });
@@ -92,19 +112,25 @@ const timeText = iso => { const d = new Date(iso); return `${d.getHours()}:${Str
 // ---------- Данные ----------
 
 async function loadChats() {
-  const [c, mem, rd, msg] = await Promise.all([
+  const [c, mem, rd, msg, mu] = await Promise.all([
     sb.from("chats").select("*"),
     sb.from("chat_members").select("*"),
-    sb.from("chat_reads").select("*").eq("user_id", me()),
-    sb.from("messages").select("id, chat_id, author, text, image_path, audio_path, poll, created_at").order("created_at", { ascending: false }).limit(500)
+    sb.from("chat_reads").select("*"),   // свои и чужие отметки «прочитано» во всех моих чатах
+    sb.from("messages").select("id, chat_id, author, text, image_path, audio_path, poll, created_at").order("created_at", { ascending: false }).limit(500),
+    sb.from("chat_mutes").select("chat_id").eq("user_id", me())
   ]);
   if (c.error) { chat.ready = false; return; }
   chat.ready = true;
+  chat.mutesReady = !mu.error;
+  chat.muted = new Set((mu.data || []).map(x => x.chat_id));
   chat.list = c.data;
   chat.members = {};
   (mem.data || []).forEach(m => (chat.members[m.chat_id] = chat.members[m.chat_id] || []).push(m.user_id));
-  chat.reads = {};
-  (rd.data || []).forEach(r => { chat.reads[r.chat_id] = r.last_read_at; });
+  chat.reads = {}; chat.othersRead = {};
+  (rd.data || []).forEach(r => {
+    if (r.user_id === me()) chat.reads[r.chat_id] = r.last_read_at;
+    else noteOtherRead(r);
+  });
   chat.last = {}; chat.unread = {};
   (msg.data || []).forEach(m => {
     chat.seen.add(m.id);
@@ -114,12 +140,27 @@ async function loadChats() {
   });
   // Время самого свежего сообщения по часам сервера: с него проверяем новое в запасном режиме
   chat.lastPoll = msg.data?.[0]?.created_at || "1970-01-01T00:00:00Z";
+  // 500 последних сообщений — на все чаты сразу. Когда общий чат болтливый, в эти 500 может не попасть
+  // ни одного сообщения из тихой лички, и в списке у неё было бы «Сообщений пока нет». Добираем отдельно
+  if ((msg.data || []).length >= 500) {
+    const missing = chat.list.filter(x => !chat.last[x.id]);
+    const got = await Promise.all(missing.map(x => sb.from("messages").select("id, chat_id, author, text, image_path, audio_path, poll, created_at")
+      .eq("chat_id", x.id).order("created_at", { ascending: false }).limit(1).maybeSingle()));
+    got.forEach(r => { if (r.data) chat.last[r.data.chat_id] = r.data; });
+  }
   paintChatBadge();
+}
+
+// Запомнить, докуда дочитал собеседник. В группе и общем чате ✓✓ ставится, когда прочитал хотя бы кто-то один — как в Telegram
+function noteOtherRead(r) {
+  if (!r || r.user_id === me()) return;
+  if (!chat.othersRead[r.chat_id] || r.last_read_at > chat.othersRead[r.chat_id]) chat.othersRead[r.chat_id] = r.last_read_at;
 }
 
 async function chatSigned(paths) {
   const now = Date.now();
-  const need = [...new Set(paths.filter(Boolean))].filter(p => !chat.urls[p] || chat.urls[p].until < now);
+  // Обновляем и те, что скоро истекут (меньше 10 минут): голосовое должно запускаться без ожидания
+  const need = [...new Set(paths.filter(Boolean))].filter(p => !chat.urls[p] || chat.urls[p].until < now + 10 * 60e3);
   // Порциями по 100, как и в ленте: в переписке бывает 200 сообщений с фото и голосовыми
   for (let i = 0; i < need.length; i += 100) {
     const { data } = await sb.storage.from(CHAT_BUCKET).createSignedUrls(need.slice(i, i + 100), 3600);
@@ -138,11 +179,14 @@ async function markRead(chatId) {
 
 // Счётчик непрочитанных на пункте «Чаты» в меню
 function paintChatBadge() {
-  const total = Object.values(chat.unread).reduce((a, b) => a + b, 0);
+  // Чаты с выключенными уведомлениями в общий счётчик не входят — как в Telegram
+  const total = Object.entries(chat.unread).reduce((a, [id, n]) => a + (chat.muted.has(id) ? 0 : n), 0);
   document.querySelectorAll("[data-chat-badge]").forEach(b => {
     b.textContent = total > 99 ? "99+" : total || "";
     b.hidden = !total;
   });
+  // Счётчик появился или пропал — пункт «Чаты» стал другой ширины, подсветка в меню подстраивается
+  if (typeof moveNavIndicator === "function") moveNavIndicator();
 }
 
 // ---------- Как показывать чат ----------
@@ -216,12 +260,19 @@ function chatListHtml(activeId) {
     <div class="chat-list">${sorted.map((c, i) => {
       const n = chat.unread[c.id] || 0, last = chat.last[c.id];
       const who = c.kind === "direct" ? otherIn(c) : null;
-      return `<a class="chat-row${n ? " unread" : ""}${c.id === activeId ? " active" : ""}" href="#/chat/${c.id}" style="--i:${Math.min(i, 20)}">
+      const muted = chat.muted.has(c.id);
+      return `<a class="chat-row${n ? " unread" : ""}${muted ? " muted" : ""}${c.id === activeId ? " active" : ""}" href="#/chat/${c.id}" style="--i:${Math.min(i, 20)}">
         <span class="ava-wrap${who && chat.online.has(who) ? " is-online" : ""}" ${who ? `data-online-user="${who}"` : ""}>${chatAvatar(c)}</span>
-        <div class="cr-main"><b>${esc(chatTitle(c))}</b><span>${esc(preview(last))}</span></div>
-        <div class="cr-side">${last ? `<time>${shortTime(last.created_at)}</time>` : ""}${n ? `<i class="cr-badge">${n > 99 ? "99+" : n}</i>` : ""}</div>
+        <div class="cr-main"><b>${esc(chatTitle(c))}${muted ? ` <i class="cr-mute" title="Уведомления выключены">🔕</i>` : ""}</b><span>${esc(preview(last))}</span></div>
+        <div class="cr-side">${last ? `<time>${last.author === me() ? listTick(c.id, last) : ""}${shortTime(last.created_at)}</time>` : ""}${n ? `<i class="cr-badge">${n > 99 ? "99+" : n}</i>` : ""}</div>
       </a>`;
     }).join("")}</div>`;
+}
+
+// Галочки у моего последнего сообщения в списке чатов: ✓ — отправлено, ✓✓ (голубые) — прочитано
+function listTick(chatId, last) {
+  const read = chat.othersRead[chatId] >= last.created_at;
+  return `<i class="cr-tick${read ? " read" : ""}" title="${read ? "Прочитано" : "Отправлено"}">${read ? "✓✓" : "✓"}</i>`;
 }
 
 async function viewChats() {
@@ -242,8 +293,11 @@ function wireGroupForm() {
       e.preventDefault();
       const members = [...gf.querySelectorAll('[data-gm][aria-pressed="true"]')].map(b => b.dataset.gm);
       const msg = document.getElementById("gMsg");
+      const title = document.getElementById("gTitle").value.trim();
+      // Название из одних пробелов браузер пропускал, а база отклоняла — говорим сразу
+      if (!title) { msg.className = "msg err"; msg.textContent = "Придумай название группы."; return; }
       if (!members.length) { msg.className = "msg err"; msg.textContent = "Выбери хотя бы одного корефана."; return; }
-      const { data, error } = await sb.rpc("create_group", { title: document.getElementById("gTitle").value.trim(), members });
+      const { data, error } = await sb.rpc("create_group", { title, members });
       if (error) { msg.className = "msg err"; msg.textContent = "Не получилось создать группу."; return; }
       chat.panel = null;
       await loadChats();
@@ -266,7 +320,7 @@ async function viewChat(id) {
   let c = chat.list.find(x => x.id === id);
   if (!c) { await loadChats(); c = chat.list.find(x => x.id === id); }
   if (!c) { shell("chats", `<div class="empty">Такого чата нет или ты в нём не состоишь. <a href="#/chats">Ко всем чатам</a></div>`); return; }
-  chat.open = id; chat.replyTo = null; chat.newBelow = 0;
+  chat.open = id; chat.replyTo = null; chat.editing = null; chat.newBelow = 0;
   document.body.classList.add("in-chat", "chats-page");
 
   const [m, rd] = await Promise.all([
@@ -296,10 +350,11 @@ async function viewChat(id) {
     <section class="chat-main">
       <header class="chat-head">
         <a href="#/chats" class="btn back" aria-label="Ко всем чатам">←</a>
-        ${c.kind === "direct" ? `<a href="#/p/${otherIn(c)}" class="ch-who">` : `<div class="ch-who">`}
+        ${c.kind === "direct" ? `<a href="#/p/${otherIn(c)}" class="ch-who">` : `<div class="ch-who" role="button" tabindex="0" data-members title="Участники и кто в сети">`}
           <span class="ava-wrap" ${c.kind === "direct" ? `data-online-user="${otherIn(c)}"` : ""}>${chatAvatar(c)}</span>
           <div><b>${esc(chatTitle(c))}</b><span id="chSub">${esc(chatSubtitle(c))}</span></div>
         ${c.kind === "direct" ? `</a>` : `</div>`}
+        <button type="button" class="btn icon-btn" data-mute aria-pressed="${chat.muted.has(c.id)}" aria-label="Уведомления из этого чата" title="Уведомления из этого чата">${chat.muted.has(c.id) ? "🔕" : "🔔"}</button>
         <button type="button" class="btn icon-btn" data-csearch aria-label="Поиск по переписке" title="Поиск">🔍</button>
         ${c.kind === "group" ? `<button type="button" class="btn" data-addppl>+ Люди</button>` : ""}
       </header>
@@ -340,6 +395,7 @@ async function viewChat(id) {
   paintPin(c);
   wireSwipeReply();
   wireLongPress();
+  wireEdgeBack();
   paintTicks();
   paintPresence();
   markRead(id);
@@ -348,7 +404,8 @@ async function viewChat(id) {
 function chatLeave() {
   // Ушли из чата во время записи голосового — запись выбрасываем и выключаем микрофон
   if (rec) stopRecording(false);
-  chat.open = null; chat.replyTo = null;
+  closeMembers(true);
+  chat.open = null; chat.replyTo = null; chat.editing = null;
   document.body.classList.remove("in-chat", "chats-page");
 }
 
@@ -386,6 +443,7 @@ const MENU_ICONS = {
   reply: `<svg viewBox="0 0 24 24"><path d="M10 6L4 12l6 6"/><path d="M4 12h10a6 6 0 0 1 6 6v1"/></svg>`,
   copy: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`,
   pin: `<svg viewBox="0 0 24 24"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6"/></svg>`,
+  edit: `<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>`,
   del: `<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>`
 };
 
@@ -416,7 +474,7 @@ function msgHtml(m, prev, c, isNew = false, next = null) {
   const showWho = !mine && c.kind !== "direct";
   const head = showWho && !sameRun;
   const jumbo = !m.image_path && !m.reply_to && !m.audio_path && !m.poll && isJumbo(m.text);
-  const meta = `<time>${timeText(m.created_at)}</time>${mine ? `<i class="tick" data-tick="${m.id}">✓</i>` : ""}`;
+  const meta = `${m.edited_at ? `<span class="m-edited" title="Изменено">изм.</span>` : ""}<time>${timeText(m.created_at)}</time>${mine ? `<i class="tick" data-tick="${m.id}">✓</i>` : ""}`;
   const orig = m.reply_to ? chat.messages.find(x => x.id === m.reply_to) : null;
   return `${newDay ? `<div class="day-sep"><span>${dateLabel(m.created_at)}</span></div>` : ""}
   ${m.id === chat.firstUnread ? `<div class="new-sep" id="newSep"><span>Новые сообщения</span></div>` : ""}
@@ -440,6 +498,7 @@ function msgHtml(m, prev, c, isNew = false, next = null) {
       <div class="m-menu">
         <button type="button" data-mact="reply">${MENU_ICONS.reply}Ответить</button>
         ${m.text ? `<button type="button" data-mact="copy">${MENU_ICONS.copy}Копировать</button>` : ""}
+        ${mine && m.text && !m.poll ? `<button type="button" data-mact="edit">${MENU_ICONS.edit}Изменить</button>` : ""}
         <button type="button" data-mact="pin">${MENU_ICONS.pin}${c.pinned_message === m.id ? "Открепить" : "Закрепить"}</button>
         ${mine ? `<button type="button" data-mact="del" class="danger">${MENU_ICONS.del}Удалить</button>` : ""}
       </div>
@@ -472,6 +531,15 @@ function wireComposer(c) {
   const refresh = () => {
     autoGrow(ta);
     const has = !!ta.value.trim();
+    // Редактирование: вместо микрофона и «отправить» — галочка «сохранить»
+    if (chat.editing) {
+      send.classList.remove("mic-mode");
+      send.innerHTML = CHECK_ICON;
+      send.setAttribute("aria-label", "Сохранить изменения");
+      send.disabled = !has;
+      return;
+    }
+    send.disabled = false;
     send.classList.toggle("mic-mode", !has);
     send.innerHTML = has ? SEND_ICON : MIC_ICON;
     send.setAttribute("aria-label", has ? "Отправить" : "Голосовое: зажми и говори");
@@ -491,10 +559,77 @@ function wireComposer(c) {
 
   const submit = async () => {
     const text = ta.value.trim(); if (!text) return;
+    if (chat.editing) return saveEdit(text);
     ta.value = ""; refresh();
     await sendMessage(c, { text });
     ta.focus();
   };
+}
+
+// ---------- Редактирование своего сообщения ----------
+// «Изменить» в меню: текст сообщения переезжает в поле ввода, сверху полоска «Редактирование», кнопка — галочка.
+// Сохранил — у сообщения появляется пометка «изм.», у собеседников текст меняется сам
+const CHECK_ICON = `<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`;
+
+function startEdit(m) {
+  if (!m || m.author !== me() || !m.text) return;
+  setReply(null);
+  chat.editing = m.id;
+  const bar = document.getElementById("replyBar"), ta = document.querySelector("#composer textarea");
+  if (!bar || !ta) return;
+  bar.innerHTML = `<div><b>✎ Редактирование</b><span>${esc(m.text)}</span></div>
+    <button type="button" class="link-btn" data-edit-cancel aria-label="Отменить редактирование">✕</button>`;
+  bar.hidden = false; bar.classList.add("editing");
+  ta.value = m.text;
+  ta.oninput?.();
+  ta.focus();
+  ta.setSelectionRange(ta.value.length, ta.value.length);   // курсор в конец текста
+}
+
+function cancelEdit(clear = true) {
+  if (!chat.editing) return;
+  chat.editing = null;
+  const bar = document.getElementById("replyBar"), ta = document.querySelector("#composer textarea");
+  if (bar) { bar.hidden = true; bar.innerHTML = ""; bar.classList.remove("editing"); }
+  if (ta) { if (clear) ta.value = ""; ta.oninput?.(); }
+}
+
+async function saveEdit(text) {
+  const m = chat.messages.find(x => x.id === chat.editing);
+  if (!m) return cancelEdit();
+  if (text === m.text) return cancelEdit();   // ничего не поменял — просто выходим из редактирования
+  const send = document.getElementById("sendBtn");
+  if (send) send.disabled = true;
+  const edited_at = new Date().toISOString();
+  // select("id"): если база не дала изменить, она не ругается, а просто ничего не меняет — так это видно
+  const { data, error } = await sb.from("messages").update({ text, edited_at }).eq("id", m.id).select("id");
+  if (send) send.disabled = false;
+  if (error || !data?.length) {
+    // Нет поля edited_at, нет разрешения или база молча ничего не поменяла — значит, не выполнен 15_message_edit.sql
+    toast(!error || /permission|policy|denied|edited_at|column|schema/i.test(error.message || "") ? "Сначала нужно выполнить 15_message_edit.sql в Supabase" : "Не получилось изменить: " + (error.message || "ошибка"));
+    return;
+  }
+  Object.assign(m, { text, edited_at });
+  cancelEdit();
+  repaintMessage(m);
+}
+
+// Перерисовать одно сообщение на месте (и ответы, где оно процитировано)
+function repaintMessage(m) {
+  const c = chat.list.find(x => x.id === chat.open); if (!c) return;
+  const redraw = msg => {
+    const i = chat.messages.indexOf(msg), el = document.querySelector(`[data-mid="${msg.id}"]`);
+    if (i < 0 || !el) return;
+    const tpl = document.createElement("template");
+    tpl.innerHTML = msgHtml(msg, chat.messages[i - 1], c, false, chat.messages[i + 1]);
+    const fresh = tpl.content.querySelector(".msg");   // без разделителей дней — они уже стоят на странице
+    if (fresh) el.replaceWith(fresh);
+  };
+  redraw(m);
+  chat.messages.filter(x => x.reply_to === m.id).forEach(redraw);
+  paintTicks();
+  if (chat.last[m.chat_id]?.id === m.id) { chat.last[m.chat_id] = { ...chat.last[m.chat_id], text: m.text }; refreshChatSide(); }
+  if (chat.list.find(x => x.id === chat.open)?.pinned_message === m.id) paintPin(c);
 }
 
 // ---------- Голосовые: зажал микрофон — пишешь, отпустил — отправилось, свайп влево — отмена ----------
@@ -528,7 +663,9 @@ async function startRecording(c, stillPressed) {
   catch (e) { toast("Нет доступа к микрофону — разреши его в настройках браузера"); return; }
   // Пока браузер спрашивал разрешение, кнопку уже отпустили — тогда в следующий раз просто зажми снова
   if (!stillPressed()) { stream.getTracks().forEach(t => t.stop()); toast("Микрофон разрешён. Теперь зажми кнопку и говори"); return; }
-  const mime = ["audio/webm;codecs=opus", "audio/mp4", "audio/webm", "audio/aac"].find(t => MediaRecorder.isTypeSupported?.(t)) || "";
+  // Сначала MP4 (AAC): его играют все, включая iPhone. WebM — только если браузер не умеет MP4:
+  // старые iPhone такие голосовые с Android не откроют
+  const mime = ["audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/aac", "audio/webm;codecs=opus", "audio/webm"].find(t => MediaRecorder.isTypeSupported?.(t)) || "";
   const mr = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
   const chunks = [];
   mr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
@@ -580,21 +717,34 @@ function voiceHtml(m) {
     <span class="v-time">${Math.floor(d / 60)}:${String(d % 60).padStart(2, "0")}</span>
   </div>`;
 }
-async function toggleVoice(id, seekFrac = null) {
+// ВАЖНО: play() должен вызываться сразу в момент нажатия, без ожидания сети.
+// iPhone разрешает звук только «по нажатию»; если перед play() что-то ждали — он считает это автозапуском
+// и блокирует («Не получилось воспроизвести»). Поэтому ссылки на голосовые берём заранее (chatSigned при открытии
+// чата, при новом сообщении и раз в 5 минут), а здесь только запускаем
+function toggleVoice(id, seekFrac = null) {
   const m = chat.messages.find(x => x.id === id); if (!m) return;
   const el = document.querySelector(`[data-voice="${id}"]`);
   if (voicePlaying !== id) {
-    await chatSigned([m.audio_path]);   // ссылка живёт час: если чат открыт давно, берём свежую
+    if (!(chat.urls[m.audio_path]?.until > Date.now())) {
+      // Ссылки ещё нет или она устарела — берём и просим нажать ещё раз (так iPhone точно разрешит звук)
+      toast("Загружаю голосовое, нажми ещё раз");
+      chatSigned([m.audio_path]);
+      return;
+    }
     document.querySelectorAll(".voice.playing").forEach(v => { v.classList.remove("playing"); v.querySelectorAll(".v-wave i.on").forEach(b => b.classList.remove("on")); });
     voicePlayer.src = chatUrl(m.audio_path);
     voicePlaying = id;
+    // Пока слушаешь голосовое, iPhone показывает плеер — пусть там будет понятно, что играет
+    try { if (window.MediaMetadata) navigator.mediaSession.metadata = new MediaMetadata({ title: `Голосовое · ${nameOf(m.author)}`, artist: "Корефаны" }); } catch (e) {}
   }
   if (seekFrac !== null && voiceLength()) voicePlayer.currentTime = voiceLength() * seekFrac;
   if (voicePlayer.paused || seekFrac !== null) {
     if (audioCtx?.state === "suspended") audioCtx.resume();
-    voicePlayer.play().catch(() => {
-      // Не заиграло — возвращаем кнопку ▶, иначе на ней застревала пауза
-      toast("Не получилось воспроизвести");
+    voicePlayer.play().catch(err => {
+      // Не заиграло — возвращаем кнопку ▶, иначе на ней застревала пауза. И говорим, в чём дело
+      toast(err?.name === "NotAllowedError" ? "Телефон не дал включить звук — нажми ещё раз"
+        : err?.name === "NotSupportedError" ? "Этот телефон не умеет такой формат голосового"
+        : "Не получилось воспроизвести");
       el?.classList.remove("playing"); voicePlaying = null;
     });
     el?.classList.add("playing");
@@ -603,6 +753,19 @@ async function toggleVoice(id, seekFrac = null) {
     el?.classList.remove("playing");
   }
 }
+// Пока открыт чат, раз в 5 минут освежаем ссылки на фото и голосовые (живут час)
+setInterval(() => {
+  if (chat.open && !document.hidden) chatSigned(chat.messages.flatMap(x => [x.image_path, x.audio_path])).catch(() => {});
+}, 5 * 60e3);
+// Файл не открылся (формат не тот или ссылка не пустила) — говорим об этом, а не молчим
+voicePlayer.addEventListener("error", () => {
+  if (!voicePlaying) return;
+  const el = document.querySelector(`[data-voice="${voicePlaying}"]`);
+  el?.classList.remove("playing");
+  voicePlaying = null;
+  toast("Голосовое не открылось. Если записано на Android, а слушаешь на iPhone, — дело в формате");
+});
+
 // Голосовые, записанные в Chrome (webm), браузер считает бесконечными: длину тогда берём из базы
 function voiceLength() {
   if (isFinite(voicePlayer.duration) && voicePlayer.duration > 0) return voicePlayer.duration;
@@ -621,6 +784,9 @@ voicePlayer.addEventListener("ended", () => {
   if (el) { el.classList.remove("playing"); el.querySelectorAll(".v-wave i.on").forEach(b => b.classList.remove("on"));
     const d = Math.round(m?.audio_duration || 0); el.querySelector(".v-time").textContent = `${Math.floor(d / 60)}:${String(d % 60).padStart(2, "0")}`; }
   voicePlaying = null;
+  // Дослушали — отпускаем плеер, чтобы iPhone убрал «Корефаны» с экрана блокировки
+  try { navigator.mediaSession.metadata = null; } catch (e) {}
+  voicePlayer.removeAttribute("src"); voicePlayer.load();
 });
 
 // ---------- Опросы ----------
@@ -715,13 +881,21 @@ async function pinMessage(id) {
   if (error) { toast("Не получилось закрепить"); return; }
   c.pinned_message = next;
   paintPin(c);
+  paintPinLabels(c);
 }
 function chatOnChatUpdate(row) {
   if (!row) return;
   const c = chat.list.find(x => x.id === row.id); if (!c) return;
   const changed = c.pinned_message !== row.pinned_message;
   Object.assign(c, row);
-  if (changed && chat.open === c.id) paintPin(c);
+  if (changed && chat.open === c.id) { paintPin(c); paintPinLabels(c); }
+}
+// В меню сообщений «Закрепить» / «Открепить» — по тому, что закреплено сейчас (раньше подпись оставалась старой)
+function paintPinLabels(c) {
+  document.querySelectorAll('.msgs-in [data-mact="pin"]').forEach(b => {
+    const mid = b.closest("[data-mid]")?.dataset.mid;
+    b.innerHTML = MENU_ICONS.pin + (c.pinned_message === mid ? "Открепить" : "Закрепить");
+  });
 }
 
 // ---------- Поиск по переписке ----------
@@ -808,7 +982,8 @@ async function sendMessage(c, { text = null, file = null, audio = null, duration
     if (audio) {
       const ext = /mp4|aac|m4a/.test(audio.type) ? "m4a" : /ogg/.test(audio.type) ? "ogg" : "webm";
       audio_path = `${c.id}/${me()}-${crypto.randomUUID()}.${ext}`;
-      const up = await sb.storage.from(CHAT_BUCKET).upload(audio_path, audio, { contentType: audio.type || "audio/webm" });
+      // Тип без хвоста «;codecs=...»: с ним некоторые телефоны не узнают файл, когда скачивают его обратно
+      const up = await sb.storage.from(CHAT_BUCKET).upload(audio_path, audio, { contentType: (audio.type || "audio/webm").split(";")[0] });
       if (up.error) throw up.error;
       await chatSigned([audio_path]);
     }
@@ -825,7 +1000,15 @@ async function sendMessage(c, { text = null, file = null, audio = null, duration
   } catch (err) {
     temp.classList.remove("pending");
     temp.classList.add("failed");
-    temp.querySelector(".bubble").insertAdjacentHTML("beforeend", `<span class="m-fail">Не отправилось</span>`);
+    // Раньше неотправленное просто висело, а текст пропадал. Теперь нажатие отправляет его ещё раз
+    temp.querySelector(".bubble").insertAdjacentHTML("beforeend", `<span class="m-fail">Не отправилось · нажми, чтобы повторить</span>`);
+    const clock = temp.querySelector(".tick"); if (clock) clock.textContent = "⚠";   // вместо часиков «отправляется»
+    temp.style.cursor = "pointer";
+    temp.onclick = () => {
+      temp.remove();
+      chat.replyTo = replyTo;   // ответ, если он был, сохраняется
+      sendMessage(c, { text, file, audio, duration, poll });
+    };
   }
 }
 
@@ -877,7 +1060,13 @@ function paintTicks() {
   });
 }
 function chatOnRead(r) {
-  if (!r || r.user_id === me() || r.chat_id !== chat.open) return;
+  if (!r || r.user_id === me()) return;
+  // Галочки в списке чатов — для любого чата
+  const before = chat.othersRead[r.chat_id];
+  noteOtherRead(r);
+  if (chat.othersRead[r.chat_id] !== before) refreshChatSide();
+  // И в открытой переписке
+  if (r.chat_id !== chat.open) return;
   chat.otherReads[r.user_id] = r.last_read_at;
   paintTicks();
 }
@@ -964,6 +1153,7 @@ function wireSwipeReply() {
 function chatOnPresence(st) {
   chat.online = new Set(Object.keys(st || {}));
   paintPresence();
+  paintMembers();   // открыта шторка «Участники» — кто зашёл или вышел, переезжает сразу
 }
 function paintPresence() {
   document.querySelectorAll("[data-online-user]").forEach(el => el.classList.toggle("is-online", chat.online.has(el.dataset.onlineUser)));
@@ -982,6 +1172,7 @@ function paintPresence() {
 }
 
 function setReply(m) {
+  if (m && chat.editing) cancelEdit();   // ответ и редактирование одновременно не бывают
   chat.replyTo = m ? m.id : null;
   const bar = document.getElementById("replyBar"); if (!bar) return;
   if (!m) { bar.hidden = true; bar.innerHTML = ""; return; }
@@ -1043,6 +1234,7 @@ document.addEventListener("click", async e => {
     }
     if (act.dataset.mact === "react") return toggleMsgReact(id, act.dataset.emoji, act.closest(".msg").querySelector(".bubble"));
     if (act.dataset.mact === "reply") return setReply(m);
+    if (act.dataset.mact === "edit") return startEdit(m);
     if (act.dataset.mact === "del") return deleteMessage(id);
     if (act.dataset.mact === "pin") return pinMessage(id);
   }
@@ -1057,10 +1249,18 @@ document.addEventListener("click", async e => {
   const pj = e.target.closest("[data-pin-jump]");
   if (pj) { const m = chat.messages.find(x => x.id === pj.dataset.pinJump); return jumpToMessage(pj.dataset.pinJump, m?.created_at || (await sb.from("messages").select("created_at").eq("id", pj.dataset.pinJump).maybeSingle()).data?.created_at); }
   if (e.target.closest("[data-unpin]")) { const c = chat.list.find(x => x.id === chat.open); if (c?.pinned_message) return pinMessage(c.pinned_message); return; }
+  // Нажал на название общего чата или группы — шторка «Участники»
+  if (e.target.closest("[data-members]")) return openMembers();
+  if (e.target.closest("[data-mem-close]")) return closeMembers();
+  const memDm = e.target.closest("[data-mem-dm]"); if (memDm) { closeMembers(true); return openDirect(memDm.dataset.memDm); }
+  if (e.target.closest(".mem-wrap a")) return closeMembers(true);   // ссылка на профиль сама откроет страницу
+  // Колокольчик в шапке чата — включить или выключить уведомления из него
+  const mb = e.target.closest("[data-mute]"); if (mb) return toggleMute(chat.open, mb);
   // Поиск
   if (e.target.closest("[data-csearch]")) return toggleSearch();
   const sj = e.target.closest("[data-search-jump]"); if (sj) return jumpToMessage(sj.dataset.searchJump, sj.dataset.at);
   if (e.target.closest("[data-reply-cancel]")) return setReply(null);
+  if (e.target.closest("[data-edit-cancel]")) return cancelEdit();
   const zoom = e.target.closest("[data-zoom]");
   if (zoom) { await chatSigned([zoom.dataset.zoom]); return openLightbox(chatUrl(zoom.dataset.zoom)); }
   // Нажал на цитату в ответе — к исходному сообщению, даже если оно далеко в истории
@@ -1131,6 +1331,153 @@ function wireLongPress() {
   box.addEventListener("touchcancel", cancel);
 }
 
+// ---------- Шторка «Участники»: кто в чате, кто сейчас в сети, кто когда был ----------
+// Сверху — кто в сети (по живому каналу), ниже остальные с «был(а) 20 мин назад» (profiles.last_seen, 16_last_seen.sql).
+// Нажал на человека — его профиль, ✉ — личка
+function chatPeople(c) {
+  const ids = c.kind === "general" ? state.profiles.map(p => p.id) : (chat.members[c.id] || []);
+  return ids.map(profile).filter(Boolean);
+}
+function seenText(p) {
+  if (chat.online.has(p.id)) return "в сети";
+  if (!p.last_seen) return "не в сети";
+  const s = (Date.now() - new Date(p.last_seen)) / 1000;
+  if (s < 120) return "был(а) только что";
+  if (s < 3600) return `был(а) ${Math.floor(s / 60)} мин назад`;
+  const d = new Date(p.last_seen), today = new Date(), y = new Date(); y.setDate(today.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return `был(а) сегодня в ${timeText(p.last_seen)}`;
+  if (d.toDateString() === y.toDateString()) return `был(а) вчера в ${timeText(p.last_seen)}`;
+  return `был(а) ${dayText(p.last_seen)}`;
+}
+function membersHtml(c) {
+  const people = chatPeople(c);
+  const on = people.filter(p => chat.online.has(p.id) || p.id === me());
+  const off = people.filter(p => !on.includes(p))
+    .sort((a, b) => (b.last_seen || "").localeCompare(a.last_seen || ""));   // кто был недавно — выше
+  const row = p => `<div class="mem-row${chat.online.has(p.id) || p.id === me() ? " on" : ""}">
+      <a href="#/p/${p.id}" class="mem-who">
+        <span class="ava-wrap${chat.online.has(p.id) || p.id === me() ? " is-online" : ""}">${avatar(p.id)}</span>
+        <span class="mem-txt"><b>${esc(p.name)}${p.id === me() ? " <i>(ты)</i>" : ""}</b><small>${p.id === me() ? "в сети" : esc(seenText(p))}</small></span>
+      </a>
+      ${p.id === me() ? "" : `<button type="button" class="mem-dm" data-mem-dm="${p.id}" aria-label="Написать ${esc(p.name)}" title="Написать">✉</button>`}
+    </div>`;
+  return `<div class="pv-grab" data-mem-close></div>
+    <h2>Участники · ${people.length}</h2>
+    ${on.length ? `<p class="mem-sec">В сети · ${on.length}</p>${on.map(row).join("")}` : ""}
+    ${off.length ? `<p class="mem-sec">Не в сети · ${off.length}</p>${off.map(row).join("")}` : ""}`;
+}
+async function openMembers() {
+  const c = chat.list.find(x => x.id === chat.open); if (!c || c.kind === "direct") return;
+  document.querySelector(".mem-wrap")?.remove();
+  const w = document.createElement("div");
+  w.className = "mem-wrap";
+  w.innerHTML = `<div class="pv-dim" data-mem-close></div><div class="mem-sheet" role="dialog" aria-label="Участники">${membersHtml(c)}</div>`;
+  document.body.appendChild(w);
+  void w.offsetWidth; w.classList.add("open");
+  // Свежие «был(а) …»: профили в памяти могли устареть
+  const { data } = await sb.from("profiles").select("id, last_seen");
+  (data || []).forEach(r => { const p = profile(r.id); if (p) p.last_seen = r.last_seen; });
+  paintMembers();
+}
+function paintMembers() {
+  const sheet = document.querySelector(".mem-wrap .mem-sheet"), c = chat.list.find(x => x.id === chat.open);
+  if (sheet && c) sheet.innerHTML = membersHtml(c);
+}
+function closeMembers(now = false) {
+  const w = document.querySelector(".mem-wrap"); if (!w) return;
+  if (now) return w.remove();
+  w.classList.remove("open"); setTimeout(() => w.remove(), 280);
+}
+
+// «Я тут»: пока сайт открыт, раз в минуту отмечаем время — по нему другие видят «был(а) 5 мин назад»
+let lastSeenOk = true;
+async function markSeen() {
+  if (!lastSeenOk || !state.session) return;
+  const { error } = await sb.from("profiles").update({ last_seen: new Date().toISOString() }).eq("id", me());
+  if (error && /last_seen|column|schema/i.test(error.message || "")) lastSeenOk = false;   // 16_last_seen.sql ещё не выполнен — не долбим базу
+}
+setInterval(() => { if (!document.hidden) markSeen(); }, 60e3);
+document.addEventListener("visibilitychange", markSeen);   // и когда вернулся, и когда свернул приложение
+setTimeout(markSeen, 5000);
+
+// Выключить уведомления из чата: ни баннера, ни звука, ни уведомлений на телефон (их фильтрует функция push),
+// и чат не попадает в общий счётчик на «Чатах». Своё у каждого человека, хранится в базе (chat_mutes)
+async function toggleMute(chatId, btn) {
+  if (!chatId) return;
+  if (!chat.mutesReady) { toast("Сначала нужно выполнить 13_chat_mutes.sql в Supabase"); return; }
+  const was = chat.muted.has(chatId);
+  btn.disabled = true;
+  const { error } = was
+    ? await sb.from("chat_mutes").delete().eq("chat_id", chatId).eq("user_id", me())
+    : await sb.from("chat_mutes").insert({ chat_id: chatId });
+  btn.disabled = false;
+  if (error) { toast("Не получилось, попробуй ещё раз"); return; }
+  if (was) chat.muted.delete(chatId); else chat.muted.add(chatId);
+  btn.textContent = was ? "🔔" : "🔕";
+  btn.setAttribute("aria-pressed", !was);
+  btn.classList.remove("pop"); void btn.offsetWidth; btn.classList.add("pop");
+  toast(was ? "🔔 Уведомления из этого чата включены" : "🔕 Уведомления из этого чата выключены");
+  paintChatBadge();
+  refreshChatSide();
+}
+
+// Esc в переписке: сначала закрывает то, что открыто поверх (меню сообщения, поиск, ответ, опрос),
+// а если ничего такого нет — закрывает саму переписку, и справа снова «Выбери чат слева»
+document.addEventListener("keydown", e => {
+  if (e.key !== "Escape" || !chat.open || document.getElementById("viewer") || document.querySelector(".lightbox, .me-wrap")) return;
+  // Поле поиска закрывает себя само (и успевает исчезнуть со страницы) — переписку при этом не трогаем
+  if (!e.target.isConnected || e.target.closest?.("#cSearch")) return;
+  if (document.querySelector(".mem-wrap")) { closeMembers(); return; }
+  const active = document.querySelector(".msgs-in .msg.active");
+  if (active) { active.classList.remove("active"); syncActive(); return; }
+  const search = document.getElementById("cSearch");
+  if (search && !search.hidden) { toggleSearch(); return; }
+  const poll = document.getElementById("pollForm");
+  if (poll && !poll.hidden) { poll.hidden = true; poll.innerHTML = ""; return; }
+  if (chat.editing) { cancelEdit(); return; }
+  if (chat.replyTo) { setReply(null); return; }
+  if (rec) { stopRecording(false); return; }
+  // Пишешь текст — Esc его не теряет: просто убирает курсор, а второй Esc закроет чат
+  const ta = e.target.closest?.("#composer textarea");
+  if (ta && ta.value.trim()) { ta.blur(); return; }
+  location.hash = "#/chats";
+});
+
+// Телефон: провёл пальцем от левого края вправо — назад к списку чатов, как в Telegram и iPhone.
+// Переписка едет за пальцем, а из-под неё видно список
+function wireEdgeBack() {
+  const main = document.querySelector(".chat-main"); if (!main) return;
+  let sx = 0, sy = 0, dx = 0, on = false, axis = null;
+  main.addEventListener("touchstart", e => {
+    on = !document.getElementById("viewer") && e.touches.length === 1 && e.touches[0].clientX < 28 && matchMedia("(max-width: 860px)").matches;
+    if (!on) return;
+    sx = e.touches[0].clientX; sy = e.touches[0].clientY; dx = 0; axis = null;
+  }, { passive: true });
+  main.addEventListener("touchmove", e => {
+    if (!on) return;
+    dx = Math.max(0, e.touches[0].clientX - sx);
+    const dy = Math.abs(e.touches[0].clientY - sy);
+    if (!axis && (dx > 10 || dy > 10)) axis = dx > dy ? "x" : "y";
+    if (axis !== "x") return;
+    main.style.transition = "none";
+    main.style.transform = `translateX(${dx}px)`;
+    main.style.boxShadow = "-12px 0 30px rgba(0, 0, 0, .5)";
+  }, { passive: true });
+  main.addEventListener("touchend", () => {
+    if (!on) return;
+    on = false;
+    if (axis !== "x") return;
+    main.style.transition = "transform .25s cubic-bezier(.2, .9, .25, 1)";
+    if (dx > Math.min(110, innerWidth * .3)) {
+      main.style.transform = "translateX(100%)";
+      setTimeout(() => { location.hash = "#/chats"; }, 200);
+    } else {
+      main.style.transform = "";
+      setTimeout(() => { main.style.transition = ""; main.style.boxShadow = ""; }, 260);
+    }
+  });
+}
+
 function toggleAddPeople() {
   const box = document.getElementById("addPpl"); if (!box) return;
   if (!box.hidden) { box.hidden = true; return; }
@@ -1191,7 +1538,9 @@ function chatOnMessage(type, n, o) {
     if (n.created_at > chat.lastPoll) chat.lastPoll = n.created_at;
     const known = chat.list.some(c => c.id === n.chat_id);
     if (!known) { loadChats().then(() => refreshChatSide()); }
-    if (n.author !== me()) playMessageSound();
+    // Чат с выключенными уведомлениями: ни звука, ни баннера (сообщение просто тихо появляется в списке)
+    const quiet = chat.muted.has(n.chat_id);
+    if (n.author !== me() && !quiet) playMessageSound();
     chat.last[n.chat_id] = n;
     if (chat.open === n.chat_id) {
       if (n.author !== me()) stopTyping();   // сообщение пришло — «печатает» больше не нужно
@@ -1199,16 +1548,27 @@ function chatOnMessage(type, n, o) {
       if (n.image_path) chatSigned([n.image_path]).then(() => {
         const img = document.querySelector(`[data-mid="${n.id}"] .m-img`); if (img) img.src = chatUrl(n.image_path);
       });
+      if (n.audio_path) chatSigned([n.audio_path]);   // чтобы новое голосовое можно было сразу включить
       if (!document.hidden) markRead(n.chat_id);
       else if (n.author !== me()) chat.unread[n.chat_id] = (chat.unread[n.chat_id] || 0) + 1;   // прочтём, когда вернётся во вкладку
     } else if (n.author !== me() && known) {
       chat.unread[n.chat_id] = (chat.unread[n.chat_id] || 0) + 1;
       paintChatBadge();
       const c = chat.list.find(x => x.id === n.chat_id);
-      const where = c.kind === "direct" ? "" : ` в «${chatTitle(c)}»`;
-      toast(`${nameOf(n.author)}${where}: ${msgSummary(n)}`, "Открыть", () => { location.hash = `#/chat/${n.chat_id}`; });
+      if (!quiet) notifyBanner({
+        who: n.author,
+        title: c.kind === "direct" ? nameOf(n.author) : `${nameOf(n.author)} · ${chatTitle(c)}`,
+        text: msgSummary(n),
+        onOpen: () => { location.hash = `#/chat/${n.chat_id}`; }
+      });
       refreshChatSide();
     }
+  }
+  // Сообщение изменили — меняем текст на месте и ставим «изм.»
+  if (type === "UPDATE" && n) {
+    const m = chat.messages.find(x => x.id === n.id);
+    if (m && (m.text !== n.text || m.edited_at !== n.edited_at)) { Object.assign(m, { text: n.text, edited_at: n.edited_at }); repaintMessage(m); }
+    else if (chat.last[n.chat_id]?.id === n.id) { chat.last[n.chat_id] = { ...chat.last[n.chat_id], text: n.text }; refreshChatSide(); }
   }
   if (type === "DELETE" && o?.id) {
     if (chat.open === o.chat_id || chat.messages.some(x => x.id === o.id)) removeMessage(o.id);
@@ -1241,7 +1601,15 @@ async function chatPoll() {
   if (!chat.ready || !chat.lastPoll) return;
   const { data } = await sb.from("messages").select("*").gt("created_at", chat.lastPoll).order("created_at");
   (data || []).forEach(m => { chatOnMessage("INSERT", m); if (m.created_at > chat.lastPoll) chat.lastPoll = m.created_at; });
+  // Галочки «прочитано» в запасном режиме обновляем раз в 15 секунд — и в списке чатов, и в открытой переписке
+  const rr = await sb.from("chat_reads").select("*");
+  (rr.data || []).forEach(chatOnRead);
   if (chat.open) {
+    // Изменённые сообщения (в запасном режиме живых обновлений нет — спрашиваем сами)
+    const since = chat.editPoll || new Date(Date.now() - 60e3).toISOString();
+    chat.editPoll = new Date().toISOString();
+    const ed = await sb.from("messages").select("*").eq("chat_id", chat.open).gt("edited_at", since);
+    (ed.data || []).forEach(n => chatOnMessage("UPDATE", n));
     const ids = chat.messages.map(x => x.id);
     if (!ids.length) return;
     const [still, r] = await Promise.all([
@@ -1258,9 +1626,6 @@ async function chatPoll() {
       r.data.filter(x => !have.has(key(x))).forEach(x => chatOnReact("INSERT", x));
       chat.reacts.filter(x => !fresh.has(key(x))).forEach(x => chatOnReact("DELETE", null, x));
     }
-    // Галочки «прочитано» в запасном режиме тоже обновляем раз в 15 секунд
-    const rr = await sb.from("chat_reads").select("*").eq("chat_id", chat.open);
-    (rr.data || []).forEach(chatOnRead);
     // Голоса в опросах и закреплённое сообщение
     const pollIds = chat.messages.filter(x => x.poll).map(x => x.id);
     if (pollIds.length) {

@@ -593,7 +593,9 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 
 /* Аватарки общих чатов и групп */
 .chat-ava { color: var(--accent-ink); font-weight: 800; font-size: 14px; }
-.chat-ava.general { background: radial-gradient(circle at 30% 30%, #ff8ae6, var(--accent)); font-family: var(--font-logo); font-weight: 400; box-shadow: 0 0 12px rgba(255, 79, 216, .6); }
+/* Свечение не тенью (box-shadow), а фильтром: iPhone во время анимаций обрезал тень круглого значка по квадрату,
+   а drop-shadow повторяет форму самого круга */
+.chat-ava.general { background: radial-gradient(circle at 30% 30%, #ff8ae6, var(--accent)); font-family: var(--font-logo); font-weight: 400; filter: drop-shadow(0 0 6px rgba(255, 79, 216, .65)); }
 .chat-ava.group { background: linear-gradient(135deg, var(--accent-2), #8c5aff); }
 
 /* Список чатов */
@@ -611,7 +613,15 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 .cr-main span { color: var(--muted); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-row.unread .cr-main span { color: var(--fg); }
 .cr-side { display: grid; justify-items: end; gap: 4px; }
-.cr-side time { font-size: 12px; color: var(--muted); }
+.cr-side time { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+/* Пометка «изм.» у отредактированного сообщения и полоска «Редактирование» над полем */
+.m-edited { font-size: 11px; font-style: italic; opacity: .8; margin-right: 4px; }
+.reply-bar.editing { border-left-color: var(--accent-2); }
+.reply-bar.editing b { color: var(--accent-2); }
+
+/* Галочки у моего последнего сообщения: ✓ отправлено, ✓✓ голубые — прочитано */
+.cr-tick { font-style: normal; font-size: 12px; letter-spacing: -3px; padding-right: 3px; color: var(--muted); }
+.cr-tick.read { color: #8ff4ff; text-shadow: 0 0 6px rgba(62, 230, 255, .8); }
 .cr-badge { min-width: 22px; height: 22px; padding: 0 7px; border-radius: 999px; display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font-size: 12px; font-style: normal; font-weight: 800; box-shadow: 0 0 12px rgba(255, 79, 216, .8); }
 
 /* Переписка на весь экран */
@@ -919,9 +929,13 @@ body.viewer-open { overflow: hidden; }
 /* --uc / --uc2 — цвет неона человека (задаётся в style у элемента) */
 .ava.big { box-shadow: 0 0 0 3px var(--bg), 0 0 0 5px var(--uc, var(--accent)), 0 0 26px var(--uc, var(--accent)); }
 .phero { position: relative; border-radius: 22px; overflow: hidden; border: 1px solid color-mix(in srgb, var(--uc, #ff4fd8) 45%, transparent); background: var(--panel); box-shadow: 0 0 34px color-mix(in srgb, var(--uc, #ff4fd8) 18%, transparent); animation: rise .45s ease both; }
-.phero-cover { position: relative; height: clamp(140px, 24vw, 230px); background: linear-gradient(135deg, color-mix(in srgb, var(--uc, #ff4fd8) 55%, #15111f), color-mix(in srgb, var(--uc2, #8a3cff) 55%, #0b0912)); }
-.phero-cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.phero-cover::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to top, var(--panel) 2%, transparent 60%); pointer-events: none; }
+/* Обложка профиля во всю высоту фото: какой формат у снимка, такой высоты и обложка — без размытых полос и без обрезки.
+   Только очень высокие вертикальные фото упираются в предел (75% экрана) и чуть подрезаются снизу */
+.phero-cover { position: relative; overflow: hidden; height: clamp(140px, 22vw, 220px); background: linear-gradient(135deg, color-mix(in srgb, var(--uc, #ff4fd8) 55%, #15111f), color-mix(in srgb, var(--uc2, #8a3cff) 55%, #0b0912)); }
+.phero-cover.has-pic { height: auto; min-height: 140px; }
+.phero-cover .pc-fg { display: block; width: 100%; height: auto; max-height: min(75vh, 720px); object-fit: cover; object-position: center 30%; }
+.phero-cover::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to top, var(--panel) 1%, transparent 28%); pointer-events: none; }
+@media (max-width: 700px) { .phero-cover .pc-fg { max-height: min(115vw, 70vh); } }
 .phero-edit { position: absolute; right: 12px; top: 12px; z-index: 1; display: flex; gap: 6px; }
 .phero-edit .btn { background: rgba(11, 9, 18, .7); backdrop-filter: blur(6px); padding: 7px 12px; font-size: 13px; }
 .phero-in { position: relative; display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap; padding: 0 22px; margin-top: -52px; z-index: 1; }
@@ -1090,6 +1104,82 @@ body.kb-open .pv-sheet { padding-bottom: 8px; }
 .pv-sheet .comments { display: flex; flex-direction: column; min-height: 0; flex: 1; border: 0; padding: 0; margin: 0; }
 .pv-sheet .c-list { flex: 1; min-height: 60px; overflow-y: auto; overscroll-behavior: contain; }
 .pv-sheet .c-form { position: static; padding: 8px 0 0; background: none; }
+
+/* Уведомление внутри сайта — баннер сверху, как на iPhone */
+.nbanner {
+  position: fixed; z-index: 95; top: calc(env(safe-area-inset-top, 0px) + 8px); left: 50%;
+  width: min(460px, calc(100vw - 16px)); transform: translateX(-50%);
+  display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer;
+  background: rgba(30, 24, 43, .96); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 79, 216, .55); border-radius: 18px;
+  box-shadow: 0 12px 34px rgba(0, 0, 0, .55), 0 0 22px rgba(255, 79, 216, .25);
+  animation: nb-in .45s cubic-bezier(.2, 1.3, .4, 1) backwards; transition: transform .25s, opacity .25s;
+}
+.nbanner .ava { width: 38px; height: 38px; flex: none; }
+.nbanner .nb-k { display: grid; place-items: center; background: var(--accent); color: var(--accent-ink); font-family: var(--font-logo); }
+.nb-main { display: grid; min-width: 0; line-height: 1.3; }
+.nb-main b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nb-main span { font-size: 14px; color: #cfc6dd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nbanner time { margin-left: auto; align-self: flex-start; font-size: 11px; color: var(--muted); flex: none; }
+.nbanner.out { animation: nb-out .3s ease forwards; }
+.nbanner.out-fade { animation: fade-out .25s ease forwards; }
+@keyframes nb-in { from { transform: translate(-50%, -140%); opacity: .4; } }
+@keyframes nb-out { to { transform: translate(-50%, -140%); opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+
+/* Чаты с выключенными уведомлениями: значок 🔕 и серый счётчик */
+.cr-mute { font-style: normal; font-size: 12px; opacity: .7; }
+.chat-row.muted .cr-badge { background: #5d5470; box-shadow: none; color: #fff; }
+.btn.pop { animation: pop .35s ease; }
+
+/* Кнопка ✎ «Изменить своё фото» у поста и в просмотре */
+.post-head { display: flex; align-items: center; }
+.post-edit, .pv-edit {
+  margin-left: auto; flex: none; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line); padding: 0;
+  background: var(--panel-2); color: var(--fg); font-size: 16px; cursor: pointer; transition: border-color .2s, box-shadow .2s;
+}
+.post-edit:hover, .pv-edit:hover { border-color: var(--accent); box-shadow: var(--glow); }
+.pv-edit { margin-left: 0; width: 32px; height: 32px; background: rgba(255, 255, 255, .1); border: 0; }
+
+/* Окно «Изменить фото»: на телефоне — шторка снизу (прибита к видимой части экрана, клавиатура не закрывает), на компьютере — окно по центру */
+/* Такая же шторка у «Участников» чата (.mem-wrap) */
+.me-wrap, .mem-wrap { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); height: var(--vvh, 100dvh); z-index: 80; display: flex; flex-direction: column; justify-content: flex-end; }
+.me-wrap.open .pv-dim, .mem-wrap.open .pv-dim { opacity: 1; }
+.me-sheet, .mem-sheet {
+  position: relative; display: grid; gap: 14px; max-height: 88%; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--panel); border-top: 1px solid var(--line); border-radius: 20px 20px 0 0;
+  padding: 0 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  transform: translateY(100%); transition: transform .3s cubic-bezier(.2, .9, .25, 1);
+}
+.me-wrap.open .me-sheet, .mem-wrap.open .mem-sheet { transform: none; }
+.me-sheet h2, .mem-sheet h2 { margin: 0; }
+.me-sheet label { display: grid; gap: 8px; }
+.me-sheet input[type=date] { width: 100%; }
+@media (min-width: 701px) {
+  .me-wrap, .mem-wrap { align-items: center; justify-content: center; }
+  .me-sheet, .mem-sheet { width: min(540px, 92vw); border: 1px solid var(--line); border-radius: 22px; padding: 22px; transform: translateY(20px) scale(.97); opacity: 0; transition: transform .3s cubic-bezier(.2, 1.2, .4, 1), opacity .25s; }
+  .mem-sheet { width: min(420px, 92vw); }
+  .me-wrap.open .me-sheet, .mem-wrap.open .mem-sheet { opacity: 1; }
+  .me-sheet .pv-grab, .mem-sheet .pv-grab { display: none; }
+}
+/* Список участников */
+.mem-sheet { gap: 2px; align-content: start; }
+.mem-sheet h2 { margin-bottom: 6px; }
+.mem-sec { margin: 12px 0 4px; font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.mem-row { display: flex; align-items: center; gap: 10px; padding: 6px 4px; border-radius: 12px; }
+.mem-row:hover { background: rgba(255, 255, 255, .05); }
+.mem-row:not(.on) .ava { opacity: .55; }
+.mem-who { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; text-decoration: none; }
+.mem-who .ava { width: 42px; height: 42px; }
+.mem-txt { display: grid; min-width: 0; line-height: 1.3; }
+.mem-txt b { font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mem-txt b i { font-style: normal; font-weight: 400; color: var(--muted); }
+.mem-txt small { font-size: 13px; color: var(--muted); }
+.mem-row.on .mem-txt small { color: #3ddc84; }
+.mem-dm { flex: none; width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel-2); color: var(--accent-2); font-size: 16px; cursor: pointer; padding: 0; }
+.mem-dm:hover { border-color: var(--accent-2); box-shadow: var(--glow-2); }
+/* Название общего чата и группы нажимается — открывает участников */
+.ch-who[data-members] { cursor: pointer; }
 
 /* Нижнее меню на телефоне */
 .bnav { display: none; }

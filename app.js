@@ -170,7 +170,8 @@ async function loadAll() {
 
 const cacheKey = () => "korefany-data-" + me();
 // Только данные (без ссылок на файлы и времени) — по этой строке понимаем, изменилось ли что-то
-const dataRaw = () => JSON.stringify([state.profiles, state.media, state.quotes, state.mr, state.qr, state.comments,
+// last_seen меняется каждую минуту — его не считаем, иначе каждый запуск казался бы «что-то изменилось» и страница перерисовывалась
+const dataRaw = () => JSON.stringify([state.profiles.map(({ last_seen, ...p }) => p), state.media, state.quotes, state.mr, state.qr, state.comments,
   state.quotesReady, state.reactsReady, state.commentsReady, chat.ready, chat.list, chat.members, chat.last, chat.unread]);
 
 function saveCache() {
@@ -180,7 +181,7 @@ function saveCache() {
   const urls = Object.fromEntries(Object.entries(state.urls).filter(([, v]) => v.until > now + 5 * 60e3));
   const chatUrls = Object.fromEntries(Object.entries(chat.urls).filter(([, v]) => v.until > now + 5 * 60e3));
   try {
-    localStorage.setItem(cacheKey(), JSON.stringify({ v: 1, raw, urls, chatUrls, reads: chat.reads, lastPoll: chat.lastPoll }));
+    localStorage.setItem(cacheKey(), JSON.stringify({ v: 1, raw, urls, chatUrls, reads: chat.reads, lastPoll: chat.lastPoll, muted: [...chat.muted] }));
   } catch (e) {
     try { localStorage.removeItem(cacheKey()); } catch (e2) {}   // не влезло в память — просто не храним
   }
@@ -194,7 +195,7 @@ function readCache() {
     const [profiles, media, quotes, mr, qr, comments, qReady, rReady, cReady, chReady, list, members, last, unread] = JSON.parse(c.raw);
     Object.assign(state, { profiles, media, quotes, mr, qr, comments, quotesReady: qReady, reactsReady: rReady, commentsReady: cReady });
     Object.assign(state.urls, c.urls || {});
-    Object.assign(chat, { ready: chReady, list, members, last, unread, reads: c.reads || {}, lastPoll: c.lastPoll });
+    Object.assign(chat, { ready: chReady, list, members, last, unread, reads: c.reads || {}, lastPoll: c.lastPoll, muted: new Set(c.muted || []) });
     Object.assign(chat.urls, c.chatUrls || {});
     Object.values(last || {}).forEach(m => chat.seen.add(m.id));
     return c.raw;
@@ -340,8 +341,21 @@ function moveNavIndicator() {
   ind.style.transition = "";
   ind.style.transform = `translateX(${target.left}px)`; ind.style.width = target.width + "px"; ind.style.opacity = 1;
   navIndicator = target;
+  // Пункт меняет ширину уже после отрисовки: пропал счётчик непрочитанных у «Чатов», догрузился шрифт.
+  // Тогда подсветка подстраивается, а не остаётся старой ширины и не наезжает на соседний пункт
+  navResize?.disconnect();
+  if (window.ResizeObserver) {
+    navResize = new ResizeObserver(() => {
+      if (!document.body.contains(on)) return navResize.disconnect();
+      if (on.offsetLeft !== navIndicator?.left || on.offsetWidth !== navIndicator?.width) moveNavIndicator();
+    });
+    navResize.observe(on);
+    navResize.observe(nav);   // соседний пункт стал шире — активный сдвинулся, хоть сам и не изменился
+  }
 }
+let navResize = null;
 window.addEventListener("resize", () => { navIndicator = null; moveNavIndicator(); });
+document.fonts?.ready.then(() => moveNavIndicator());
 // Когда прокрутили страницу, капсула светится сильнее
 window.addEventListener("scroll", () => document.body.classList.toggle("scrolled", scrollY > 8), { passive: true });
 
@@ -438,6 +452,7 @@ function postHtml(m, i = 0) {
   return `<article class="post" data-post="${m.id}" style="--i:${i}">
     <header class="post-head">
       <a href="#/p/${m.owner}" class="post-who" style="${ucStyle(m.owner)}">${avatar(m.owner)}<div><b>${esc(nameOf(m.owner))}</b><span>${dayText(m.taken_at || m.created_at)}</span></div></a>
+      <button type="button" class="post-edit" data-edit-media="${m.id}" aria-label="${m.owner === me() ? "Изменить: кто на фото, подпись, дата" : "Отметить, кто на фото"}" title="${m.owner === me() ? "Изменить" : "Отметить, кто на фото"}">${m.owner === me() ? "✎" : "👥"}</button>
     </header>
     <div class="post-media" data-post-media="${m.id}">${m.kind === "video"
       ? `<video src="${url(m.path)}" poster="${url(thumbPath(m))}" controls playsinline preload="none"></video>`
@@ -657,8 +672,8 @@ function profileHero(p, actions = "", editable = false) {
   const cover = p.cover_path && url(p.cover_path);
   const pq = p.pinned_quote && state.quotes.find(q => q.id === p.pinned_quote);
   return `<section class="phero" style="${ucStyle(id)}">
-    <div class="phero-cover">
-      ${cover ? `<img src="${cover}" alt="">` : ""}
+    <div class="phero-cover${cover ? " has-pic" : ""}">
+      ${cover ? `<img class="pc-fg" src="${cover}" alt="Обложка">` : ""}
       ${editable ? `<div class="phero-edit">
         <button type="button" class="btn" data-pick="cover">📷 Обложка</button>
         ${p.cover_path ? `<button type="button" class="btn" data-remove="cover" aria-label="Убрать обложку">✕</button>` : ""}
@@ -1159,7 +1174,9 @@ async function openViewer(id, dir = 0, fromEl = null) {
       ${reactButtons("m", m.id)}
       ${m.people.length ? `<div><h2>На фото</h2><div class="chips">${m.people.map(p =>
         `<a class="chip" href="#/p/${p}">${avatar(p)}${esc(nameOf(p))}</a>`).join("")}</div></div>` : ""}
-      ${m.owner === me() ? `<div><button class="btn danger" data-del="${m.id}">Удалить</button></div>` : ""}
+      <div class="row">${m.owner === me()
+        ? `<button type="button" class="btn" data-edit-media="${m.id}">✎ Изменить</button><button class="btn danger" data-del="${m.id}">Удалить</button>`
+        : `<button type="button" class="btn" data-edit-media="${m.id}">👥 Отметить, кто на фото</button>`}</div>
       ${commentsBlock(m)}
     </aside>`;
   const fresh = !document.getElementById("viewer");
@@ -1203,6 +1220,7 @@ function pvTop(m, list, idx) {
   return `<button type="button" class="pv-x" data-close aria-label="Закрыть">✕</button>
     <a class="pv-who" href="#/p/${m.owner}" style="${ucStyle(m.owner)}">${avatar(m.owner)}<b>${esc(nameOf(m.owner))}</b></a>
     <span class="pv-count">${idx + 1} / ${list.length}</span>
+    <button type="button" class="pv-edit" data-edit-media="${m.id}" aria-label="${m.owner === me() ? "Изменить: кто на фото, подпись, дата" : "Отметить, кто на фото"}">${m.owner === me() ? "✎" : "👥"}</button>
     ${m.owner === me() ? `<button type="button" class="pv-del" data-del="${m.id}" aria-label="Удалить">Удалить</button>` : ""}`;
 }
 // Точки под фото: не больше семи, текущая — вытянутая розовая
@@ -1381,9 +1399,85 @@ function flyIn(src, viewer) {
   setTimeout(whenLoaded, 600);   // запасной путь: фото не должно остаться спрятанным, даже если полёт не доиграл
 }
 
+// ---------- Изменить своё фото: кто на нём, подпись, дата ----------
+// Открывается кнопкой ✎ (своё фото) или 👥 (чужое) у поста и в просмотре.
+// Отмечать людей может любой корефан (14_tags_everyone.sql), подпись и дату — только тот, кто загрузил
+function openMediaEditor(id) {
+  const m = state.media.find(x => x.id === id); if (!m) return;
+  const own = m.owner === me(), what = m.kind === "video" ? "видео" : "фото";
+  document.querySelector(".me-wrap")?.remove();
+  const w = document.createElement("div");
+  w.className = "me-wrap";
+  w.innerHTML = `<div class="pv-dim" data-me-close></div>
+    <form class="me-sheet" id="mediaEdit">
+      <div class="pv-grab" data-me-close></div>
+      <h2>${own ? `Изменить ${what}` : `Кто на ${what}?`}</h2>
+      <label>${own ? `Кто на ${what}` : `Отметь всех, кого узнаёшь. ${what === "фото" ? "Фото" : "Видео"} появится у них на страничке`}
+        <div class="chips">${state.profiles.map(p =>
+          `<button type="button" class="chip" data-et="${p.id}" aria-pressed="${m.people.includes(p.id)}">${avatar(p.id)}${esc(p.name)}</button>`).join("")}</div>
+      </label>
+      ${own ? `<label>Подпись<textarea id="eCap" maxlength="500" placeholder="Что тут происходит?">${esc(m.caption || "")}</textarea></label>
+      <label>Когда это было<input type="date" id="eDate" value="${m.taken_at || ""}"></label>` : ""}
+      <div class="row"><button type="submit" class="btn primary">Сохранить</button><button type="button" class="btn" data-me-close>Отмена</button><p class="msg" id="eMsg"></p></div>
+    </form>`;
+  document.body.appendChild(w);
+  void w.offsetWidth; w.classList.add("open");
+  if (own) autoGrow(w.querySelector("#eCap"));
+  const close = () => { w.classList.remove("open"); setTimeout(() => w.remove(), 280); };
+  w.querySelectorAll("[data-me-close]").forEach(b => b.onclick = close);
+  w.querySelectorAll("[data-et]").forEach(b => b.onclick = () => b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") !== "true"));
+  w.querySelector("#mediaEdit").onsubmit = async e => {
+    e.preventDefault();
+    const btn = w.querySelector('button[type="submit"]'), msg = w.querySelector("#eMsg");
+    if (btn.disabled) return;
+    btn.disabled = true; msg.className = "msg"; msg.textContent = "Сохраняю...";
+    const people = [...w.querySelectorAll('[data-et][aria-pressed="true"]')].map(b => b.dataset.et);
+    // Подпись и дату меняет только владелец; у чужого фото оставляем как было
+    const caption = own ? w.querySelector("#eCap").value.trim() || null : m.caption || null;
+    const taken_at = own ? w.querySelector("#eDate").value || null : m.taken_at || null;
+    const add = people.filter(p => !m.people.includes(p)), rem = m.people.filter(p => !people.includes(p));
+    const results = await Promise.all([
+      rem.length ? sb.from("media_people").delete().eq("media_id", m.id).in("person_id", rem) : { error: null },
+      add.length ? sb.from("media_people").insert(add.map(person_id => ({ media_id: m.id, person_id }))) : { error: null },
+      caption !== (m.caption || null) || taken_at !== (m.taken_at || null)
+        ? sb.from("media").update({ caption, taken_at }).eq("id", m.id) : { error: null }
+    ]);
+    const [rDel, rAdd, rUpd] = results;
+    // Что получилось — то и запоминаем, даже если часть не сохранилась
+    if (!rDel.error) m.people = m.people.filter(p => !rem.includes(p));
+    if (!rAdd.error) m.people = [...m.people, ...add.filter(p => !m.people.includes(p))];
+    if (!rUpd.error) { m.caption = caption; m.taken_at = taken_at; }
+    refreshMediaEverywhere(m);
+    if (results.some(r => r.error)) {
+      btn.disabled = false; msg.className = "msg err";
+      // Чужое фото, а база ещё не разрешает отмечать всем — значит, не выполнен SQL
+      msg.textContent = !own ? "Не сохранилось. Если ошибка повторяется — нужно выполнить 14_tags_everyone.sql в Supabase." : "Сохранилось не всё. Попробуй ещё раз.";
+      return;
+    }
+    saveCache();
+    close();
+    toast("Сохранено");
+  };
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest("[data-edit-media]");
+  if (b) { e.preventDefault(); openMediaEditor(b.dataset.editMedia); }
+});
+
+// Фото изменили — перерисовываем его везде, где оно сейчас на экране: пост в ленте и открытый просмотр
+function refreshMediaEverywhere(m) {
+  const post = document.querySelector(`[data-post="${m.id}"]`);
+  if (post) { post.outerHTML = postHtml(m); pvShowLoaded(document.querySelector(`[data-post="${m.id}"]`)); }
+  if (state.viewing !== m.id) return;
+  const pvInfoEl = document.querySelector(".viewer.pv .pv-info");
+  if (pvInfoEl) pvInfoEl.innerHTML = pvInfo(m);
+  else if (document.querySelector(".viewer")) openViewer(m.id);   // на компьютере просто перерисовываем просмотр
+}
+
 // silent: закрыть без шага «назад» в истории (когда уходим по ссылке или уже нажали «Назад»)
 function closeViewer(silent = false) {
   const el = document.getElementById("viewer");
+  document.querySelector(".me-wrap")?.remove();   // окно «Изменить фото» закрывается вместе с просмотром
   if (!el) return;
   el.remove();
   state.viewing = null;
@@ -1553,6 +1647,9 @@ document.addEventListener("click", async e => {
 document.addEventListener("keydown", e => {
   // Постер-фильтр в галерее выбирается и с клавиатуры
   if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("[data-gfilter]")) { e.preventDefault(); e.target.click(); return; }
+  // Открыто окно «Изменить фото» — Esc закрывает только его, а не просмотр под ним
+  const editor = document.querySelector(".me-wrap");
+  if (e.key === "Escape" && editor) { editor.classList.remove("open"); setTimeout(() => editor.remove(), 280); return; }
   if (!document.getElementById("viewer")) return;
   if (e.target.closest?.("textarea, input")) return;   // пишут комментарий — стрелки не листают
   if (e.key === "Escape") closeViewer();
@@ -1735,8 +1832,9 @@ async function pickServer() {
   if (!KOREFANY.proxyUrl) return KOREFANY.url;   // посредника нет — сразу напрямую
   let saved = null;
   try { saved = JSON.parse(localStorage.getItem("korefany-server") || "null"); } catch (e) {}
-  // Посредника перепроверяем чаще (раз в 6 часов): вдруг тогда просто моргнул интернет
-  const fresh = saved && Date.now() - saved.at < (saved.proxy ? 6 * 3600e3 : 864e5);
+  // Посредника перепроверяем через 20 минут: чаще всего это был короткий сбой Supabase или интернета,
+  // а в запасном режиме сообщения приходят с задержкой
+  const fresh = saved && Date.now() - saved.at < (saved.proxy ? 20 * 60e3 : 864e5);
   if (fresh && saved.proxy) return KOREFANY.proxyUrl;
   // Вчера напрямую работало — стартуем напрямую сразу, а проверяем в фоне.
   // Если вдруг перестало, запоминаем посредника и перезапускаем сайт уже через него
@@ -1780,6 +1878,8 @@ async function start() {
 function listenAuth() { sb.auth.onAuthStateChange((event, session) => {
   const was = state.session?.user?.id;
   state.session = session;
+  // Вход продлился (новый ключ) — отдаём его и отдельному живому каналу, иначе он отвалится через час
+  if (liveSb && session) liveSb.realtime.setAuth(session.access_token);
   setTimeout(async () => {
     if (!session) {
       // Вышли (или вход истёк) — закрываем всё открытое, иначе экран входа остался бы с классами переписки
@@ -1830,13 +1930,31 @@ function listenAuth() { sb.auth.onAuthStateChange((event, session) => {
 // Если Supabase открывается напрямую, изменения прилетают сразу (Realtime).
 // Если нет (работаем через обход), сайт сам проверяет новое каждые 15 секунд.
 
-let liveChannel = null, pollTimer = null;
+let liveChannel = null, pollTimer = null, liveSb = null;
+
+// Клиент для живого канала. Обычно это тот же sb. Но если обычные запросы идут через посредника (Netlify),
+// живой канал всё равно пробуем открыть напрямую: посредник его не пропускает, а напрямую он часто работает
+// (например, когда Supabase просто моргнул при запуске). Без живого канала нет «печатает» и «в сети»
+function liveClient() {
+  if (state.direct) return sb;
+  if (!liveSb) {
+    liveSb = supabase.createClient(KOREFANY.url, KOREFANY.key, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false, storageKey: "korefany-live-auth" }
+    });
+    // У этого клиента своего входа нет, и при запуске он сбросил бы ключ канала на анонимный — возвращаем наш
+    liveSb.auth.onAuthStateChange(() => setTimeout(() => liveSb.realtime.setAuth(state.session?.access_token), 0));
+  }
+  liveSb.realtime.setAuth(state.session?.access_token);   // канал видит то же, что и я (правила доступа)
+  return liveSb;
+}
 
 function startLive() {
-  if (liveChannel || pollTimer) return;
-  if (!state.direct) return startPolling();
+  if (liveChannel) return;
+  const cl = liveClient();
+  // Пока канал не поднялся — на всякий случай проверяем новое раз в 15 секунд (в запасном режиме)
+  if (!state.direct) startPolling();
   // presence key — мой id: по нему остальные видят, что я на сайте
-  liveChannel = sb.channel("korefany-live", { config: { presence: { key: me() } } })
+  liveChannel = cl.channel("korefany-live", { config: { presence: { key: me() } } })
     .on("presence", { event: "sync" }, () => chatOnPresence(liveChannel.presenceState()))
     .on("postgres_changes", { event: "*", schema: "public", table: "chat_reads" }, p => chatOnRead(p.new))
     .on("postgres_changes", { event: "*", schema: "public", table: "comments" }, p => onComment(p.eventType, p.new, p.old))
@@ -1850,14 +1968,21 @@ function startLive() {
     .on("postgres_changes", { event: "*", schema: "public", table: "poll_votes" }, p => chatOnVote(p.eventType, p.new, p.old))
     .on("postgres_changes", { event: "UPDATE", schema: "public", table: "chats" }, p => chatOnChatUpdate(p.new))
     .subscribe(status => {
-      if (status === "SUBSCRIBED") liveChannel.track({ at: new Date().toISOString() });   // «я в сети»
-      // Живой канал не поднялся — переходим на проверку раз в 15 секунд
-      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") { sb.removeChannel(liveChannel); liveChannel = null; startPolling(); }
+      if (status === "SUBSCRIBED") {
+        liveChannel.track({ at: new Date().toISOString() });   // «я в сети»
+        // Канал работает — проверка раз в 15 секунд больше не нужна, всё приходит само
+        if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      }
+      // Живой канал не поднялся — переходим на проверку раз в 15 секунд и через минуту пробуем снова
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+        cl.removeChannel(liveChannel); liveChannel = null; startPolling();
+        setTimeout(() => { if (state.session && !liveChannel) startLive(); }, 60000);
+      }
     });
 }
 
 function stopLive() {
-  if (liveChannel) { sb.removeChannel(liveChannel); liveChannel = null; }
+  if (liveChannel) { liveClient().removeChannel(liveChannel); liveChannel = null; }
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
@@ -1914,7 +2039,8 @@ function onComment(type, n, o) {
       }
     } else {
       const m = state.media.find(x => x.id === n.media_id);
-      if (m && m.owner === me() && n.author !== me()) toast(`${nameOf(n.author)} прокомментировал твоё фото`, "Открыть", () => openViewer(m.id));
+      if (m && m.owner === me() && n.author !== me())
+        notifyBanner({ who: n.author, title: `${nameOf(n.author)} · комментарий к твоему фото`, text: n.text, onOpen: () => openViewer(m.id) });
     }
     paintCommentCount(n.media_id);
     refreshPost(n.media_id);
@@ -1953,8 +2079,10 @@ function onNewStuff(kind, row) {
   const who = kind === "media" ? row.owner : row.added_by;
   if (who === me() || announced.has(row.id)) return;
   announced.add(row.id);
-  toast(kind === "media" ? `${nameOf(who)} загрузил новое` : `${nameOf(who)} добавил цитату`, "Показать", async () => {
-    await loadAll(); location.hash = kind === "media" ? "#/" : "#/quotes"; route();
+  notifyBanner({
+    who, title: nameOf(who),
+    text: kind === "media" ? "загрузил новое фото — нажми, чтобы посмотреть" : "добавил цитату — нажми, чтобы посмотреть",
+    onOpen: async () => { await loadAll(); location.hash = kind === "media" ? "#/" : "#/quotes"; route(); }
   });
 }
 
@@ -2020,7 +2148,37 @@ async function checkUpdate() {
 document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
 setInterval(() => { if (!document.hidden) checkUpdate(); }, 10 * 60 * 1000);
 
-// Неоновая плашка снизу экрана
+// ---------- Уведомление внутри сайта: баннер сверху, как на iPhone ----------
+// Аватарка, кто и где, начало сообщения. Нажал — открылось, смахнул вверх — убрал, сам уходит через 4 секунды.
+// Новый баннер заменяет предыдущий. Внизу ничего не закрывает — там кнопки отправки и меню
+let bannerTimer = null;
+function notifyBanner({ who, title, text, onOpen }) {
+  document.querySelector(".nbanner")?.remove();
+  clearTimeout(bannerTimer);
+  const b = document.createElement("div");
+  b.className = "nbanner"; b.setAttribute("role", "status");
+  b.innerHTML = `${who ? avatar(who) : `<span class="ava nb-k">К</span>`}
+    <div class="nb-main"><b>${esc(title)}</b><span>${esc(text)}</span></div><time>сейчас</time>`;
+  document.body.appendChild(b);
+  const hide = (up = true) => {
+    clearTimeout(bannerTimer);
+    if (!b.isConnected || b.classList.contains("out")) return;
+    b.classList.add(up ? "out" : "out-fade");
+    setTimeout(() => b.remove(), 300);
+  };
+  bannerTimer = setTimeout(hide, 4000);
+  b.onclick = () => { hide(false); onOpen?.(); };
+  // Смахнуть вверх — убрать: баннер едет за пальцем
+  let sy = 0, dy = 0;
+  b.addEventListener("touchstart", e => { sy = e.touches[0].clientY; dy = 0; clearTimeout(bannerTimer); b.style.transition = "none"; }, { passive: true });
+  b.addEventListener("touchmove", e => { dy = Math.min(0, e.touches[0].clientY - sy); b.style.transform = `translate(-50%, ${dy}px)`; }, { passive: true });
+  b.addEventListener("touchend", () => {
+    b.style.transition = ""; b.style.transform = "";
+    if (dy < -25) { hide(); b.onclick = null; } else bannerTimer = setTimeout(hide, 2500);
+  });
+}
+
+// Неоновая плашка снизу экрана — для коротких сообщений («Сохранено», ошибки)
 function toast(text, action, onAction) {
   document.querySelector(".toast")?.remove();
   const t = document.createElement("div");
@@ -2029,7 +2187,7 @@ function toast(text, action, onAction) {
   document.body.appendChild(t);
   const hide = () => { t.classList.add("out"); setTimeout(() => t.remove(), 300); };
   if (action) t.querySelector("button").onclick = () => { hide(); onAction(); };
-  setTimeout(hide, 8000);
+  setTimeout(hide, action ? 6000 : 2500);   // короткие «Сохранено» не висят над кнопками
 }
 
 start();
