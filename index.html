@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<!-- maximum-scale=1: iPhone не приближает страницу при нажатии на поле ввода (пальцами увеличивать всё равно можно) -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>Корефаны</title>
+<!-- Иконка и настройки, чтобы сайт можно было поставить на телефон как приложение -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="icons/favicon.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="theme-color" content="#0b0912">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Корефаны">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik+Mono+One&family=Manrope:wght@400;500;600;700&display=swap">
+<!-- ?v=... меняем при каждом обновлении, чтобы телефоны не показывали старые файлы из памяти -->
+<link rel="stylesheet" href="style.css?v=46">
+</head>
+<body>
+  <!-- Пока сайт запускается, видны мерцающие заготовки ленты -->
+  <div id="app"><div class="loading skeleton" aria-label="Загружаю">
+    <div class="sk-top"></div>
+    <div class="sk-body">
+      <div class="sk sk-cover"></div>
+      <div class="sk-grid">
+        <div class="sk" style="height:180px"></div><div class="sk" style="height:240px"></div><div class="sk" style="height:150px"></div><div class="sk" style="height:210px"></div>
+        <div class="sk" style="height:230px"></div><div class="sk" style="height:160px"></div><div class="sk" style="height:200px"></div><div class="sk" style="height:170px"></div>
+      </div>
+    </div>
+  </div></div>
+
+  <script>
+    // Если через 20 секунд всё ещё висит «Загружаю...», объясняем, что делать
+    setTimeout(function () {
+      if (!document.querySelector("#app .loading") || document.querySelector("#app .loading b")) return;
+      document.getElementById("app").innerHTML =
+        '<div class="loading"><p><b>Сайт не может загрузиться.</b></p>' +
+        '<p>Попробуй по порядку:<br>1. Обнови страницу.<br>2. Переключись с мобильного интернета на Wi‑Fi или наоборот.<br>' +
+        '3. Включи VPN: некоторые провайдеры блокируют сервисы, на которых работает сайт.<br>4. Обнови браузер или открой сайт в Chrome.</p></div>';
+    }, 20000);
+  </script>
+
+  <!-- Библиотека Supabase 2.45.4 лежит прямо на сайте, чтобы не зависеть от чужих серверов -->
+  <script src="vendor/supabase.js"></script>
+  <script src="config.js?v=46"></script>
+  <script src="app.js?v=46"></script>
+  <script src="chat.js?v=46"></script>
+  <script src="push.js?v=46"></script>
+</body>
+</html>
