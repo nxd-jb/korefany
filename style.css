@@ -670,8 +670,10 @@ body.in-chat { padding-bottom: 0; }
 .attach svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
 /* Safari на iPhone оставляет у кнопок свои внутренние отступы и плохо центрирует сетку внутри <button>:
    значки скрепки, микрофона и «отправить» съезжали вправо. Убираем отступы и центрируем через flex */
-.attach, .c-send, .to-bottom { padding: 0; display: flex; align-items: center; justify-content: center; line-height: 0; }
-.attach svg, .c-send svg, .to-bottom svg { display: block; flex: none; margin: 0; }
+/* Значок прибит к центру кружка абсолютно: так ему не мешают никакие отступы, которые добавляет браузер */
+.attach, .c-send { position: relative; }
+.attach, .c-send, .to-bottom { padding: 0 !important; min-width: 0; line-height: 0; }
+.attach svg, .c-send svg, .to-bottom svg { display: block; position: absolute; inset: 0; margin: auto; }
 .to-bottom .tb-count { line-height: 1; }
 
 /* Фото на весь экран */
