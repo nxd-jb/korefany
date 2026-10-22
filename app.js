@@ -985,7 +985,8 @@ function wireMePictures(p) {
     if (old) await sb.storage.from(BUCKET).remove([old]);
     await loadAll(); viewMe();
   };
-  document.querySelectorAll("[data-remove]").forEach(b => b.onclick = () => save(b.dataset.remove === "cover" ? "cover_path" : "avatar_path", null));
+  document.querySelectorAll("[data-remove]").forEach(b => b.onclick = () => save(b.dataset.remove === "cover" ? "cover_path" : "avatar_path", null)
+    .catch(err => { msg.className = "msg err"; msg.textContent = "Не получилось: " + (err.message || err); }));
   file.onchange = async () => {
     const f = file.files[0]; file.value = ""; if (!f || !what) return;
     msg.className = "msg"; msg.textContent = "Загружаю...";
@@ -1232,7 +1233,8 @@ document.addEventListener("click", async e => {
   if (delq) {
     if (delq.textContent !== "точно удалить?") { delq.textContent = "точно удалить?"; return; }
     delq.disabled = true;
-    await sb.from("quotes").delete().eq("id", delq.dataset.delq);
+    const { error } = await sb.from("quotes").delete().eq("id", delq.dataset.delq);
+    if (error) { delq.disabled = false; delq.textContent = "не вышло, ещё раз?"; return; }
     await loadAll(); route();
     return;
   }
@@ -1242,8 +1244,10 @@ document.addEventListener("click", async e => {
     if (del.textContent !== "Точно удалить?") { del.textContent = "Точно удалить?"; return; }
     const m = state.media.find(x => x.id === del.dataset.del);
     del.disabled = true;
+    // Сначала запись в базе, потом файлы: если удаление не прошло, пост не останется без картинки
+    const { error } = await sb.from("media").delete().eq("id", m.id);
+    if (error) { del.disabled = false; del.textContent = "Не удалилось, ещё раз?"; return; }
     await sb.storage.from(BUCKET).remove([m.path, thumbPath(m)]);
-    await sb.from("media").delete().eq("id", m.id);
     closeViewer(); await loadAll(); route();
   }
 });
@@ -1516,15 +1520,17 @@ function stopLive() {
 function startPolling() {
   if (pollTimer) return;
   pollTimer = setInterval(poll, 15000);
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && pollTimer) poll(); });
 }
+// Вернулся во вкладку — сразу проверяем новое (подписываемся один раз, а не при каждом входе)
+document.addEventListener("visibilitychange", () => { if (!document.hidden && pollTimer) poll(); });
 
 // Проверка новых данных: сравниваем с тем, что уже есть на странице
 async function poll() {
   if (document.hidden || !state.session) return;
+  // Комментарии и реакции — порциями по 1000: если взять только первую тысячу, остальные посчитались бы удалёнными
   const [c, r, m, q] = await Promise.all([
-    sb.from("comments").select("*").order("created_at"),
-    sb.from("media_reactions").select("*"),
+    fetchAll(() => sb.from("comments").select("*").order("created_at")),
+    fetchAll(() => sb.from("media_reactions").select("*").order("created_at")),
     sb.from("media").select("id, owner, created_at").order("created_at", { ascending: false }).limit(20),
     sb.from("quotes").select("id, added_by, created_at").order("created_at", { ascending: false }).limit(20)
   ]);
@@ -1590,10 +1596,13 @@ function onReact(type, n, o) {
   paintReact("m", r.media_id, r.emoji);
 }
 
-// Кто-то добавил фото или цитату: показываем плашку, чтобы не дёргать страницу под рукой
+// Кто-то добавил фото или цитату: показываем плашку, чтобы не дёргать страницу под рукой.
+// О каждой новинке говорим один раз: в запасном режиме проверка каждые 15 секунд видит её снова
+const announced = new Set();
 function onNewStuff(kind, row) {
   const who = kind === "media" ? row.owner : row.added_by;
-  if (who === me()) return;
+  if (who === me() || announced.has(row.id)) return;
+  announced.add(row.id);
   toast(kind === "media" ? `${nameOf(who)} загрузил новое` : `${nameOf(who)} добавил цитату`, "Показать", async () => {
     await loadAll(); location.hash = kind === "media" ? "#/" : "#/quotes"; route();
   });

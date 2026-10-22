@@ -120,9 +120,11 @@ async function loadChats() {
 async function chatSigned(paths) {
   const now = Date.now();
   const need = [...new Set(paths.filter(Boolean))].filter(p => !chat.urls[p] || chat.urls[p].until < now);
-  if (!need.length) return;
-  const { data } = await sb.storage.from(CHAT_BUCKET).createSignedUrls(need, 3600);
-  (data || []).forEach(r => { if (r.signedUrl) chat.urls[r.path] = { url: r.signedUrl, until: now + 50 * 60 * 1000 }; });
+  // Порциями по 100, как и в ленте: в переписке бывает 200 сообщений с фото и голосовыми
+  for (let i = 0; i < need.length; i += 100) {
+    const { data } = await sb.storage.from(CHAT_BUCKET).createSignedUrls(need.slice(i, i + 100), 3600);
+    (data || []).forEach(r => { if (r.signedUrl) chat.urls[r.path] = { url: r.signedUrl, until: now + 50 * 60 * 1000 }; });
+  }
 }
 const chatUrl = p => chat.urls[p]?.url || "";
 
@@ -343,6 +345,8 @@ async function viewChat(id) {
 }
 
 function chatLeave() {
+  // Ушли из чата во время записи голосового — запись выбрасываем и выключаем микрофон
+  if (rec) stopRecording(false);
   chat.open = null; chat.replyTo = null;
   document.body.classList.remove("in-chat", "chats-page");
 }
@@ -398,7 +402,7 @@ function msgHtml(m, prev, c, isNew = false, next = null) {
           <b>${orig ? esc(nameOf(orig.author)) : "Сообщение"}</b><span>${orig ? esc(msgSummary(orig)) : "удалено"}</span></button>` : ""}
         ${m.image_path ? `<img class="m-img" src="${chatUrl(m.image_path)}" data-zoom="${esc(m.image_path)}" alt="Фото" loading="lazy">` : ""}
         ${m.audio_path ? voiceHtml(m) : ""}
-        ${m.poll ? `<div class="poll" data-poll="${m.id}">${pollInner(m)}</div>` : ""}
+        ${Array.isArray(m.poll?.options) ? `<div class="poll" data-poll="${m.id}">${pollInner(m)}</div>` : ""}
         ${m.text ? `<p class="m-text">${jumbo ? esc(m.text) : linkify(esc(m.text))}<span class="m-meta">${meta}</span></p>`
           : m.image_path && !m.audio_path && !m.poll ? `<span class="m-meta on-img">${meta}</span>`
           : `<span class="m-meta m-meta-block">${meta}</span>`}
@@ -543,15 +547,16 @@ function voiceHtml(m) {
     <span class="v-time">${Math.floor(d / 60)}:${String(d % 60).padStart(2, "0")}</span>
   </div>`;
 }
-function toggleVoice(id, seekFrac = null) {
+async function toggleVoice(id, seekFrac = null) {
   const m = chat.messages.find(x => x.id === id); if (!m) return;
   const el = document.querySelector(`[data-voice="${id}"]`);
   if (voicePlaying !== id) {
+    await chatSigned([m.audio_path]);   // ссылка живёт час: если чат открыт давно, берём свежую
     document.querySelectorAll(".voice.playing").forEach(v => { v.classList.remove("playing"); v.querySelector(".v-play").textContent = "▶"; v.querySelectorAll(".v-wave i.on").forEach(b => b.classList.remove("on")); });
     voicePlayer.src = chatUrl(m.audio_path);
     voicePlaying = id;
   }
-  if (seekFrac !== null && isFinite(voicePlayer.duration)) voicePlayer.currentTime = voicePlayer.duration * seekFrac;
+  if (seekFrac !== null && voiceLength()) voicePlayer.currentTime = voiceLength() * seekFrac;
   if (voicePlayer.paused || seekFrac !== null) {
     if (audioCtx?.state === "suspended") audioCtx.resume();
     voicePlayer.play().catch(() => toast("Не получилось воспроизвести"));
@@ -561,11 +566,16 @@ function toggleVoice(id, seekFrac = null) {
     el?.classList.remove("playing"); if (el) el.querySelector(".v-play").textContent = "▶";
   }
 }
+// Голосовые, записанные в Chrome (webm), браузер считает бесконечными: длину тогда берём из базы
+function voiceLength() {
+  if (isFinite(voicePlayer.duration) && voicePlayer.duration > 0) return voicePlayer.duration;
+  return chat.messages.find(x => x.id === voicePlaying)?.audio_duration || 0;
+}
 voicePlayer.addEventListener("timeupdate", () => {
-  const el = voicePlaying && document.querySelector(`[data-voice="${voicePlaying}"]`); if (!el || !voicePlayer.duration) return;
-  const bars = el.querySelectorAll(".v-wave i"), lit = Math.round(voicePlayer.currentTime / voicePlayer.duration * bars.length);
+  const el = voicePlaying && document.querySelector(`[data-voice="${voicePlaying}"]`), len = voiceLength(); if (!el || !len) return;
+  const bars = el.querySelectorAll(".v-wave i"), lit = Math.round(Math.min(1, voicePlayer.currentTime / len) * bars.length);
   bars.forEach((b, i) => b.classList.toggle("on", i < lit));
-  const left = Math.ceil(voicePlayer.duration - voicePlayer.currentTime);
+  const left = Math.max(0, Math.ceil(len - voicePlayer.currentTime));
   el.querySelector(".v-time").textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
 });
 voicePlayer.addEventListener("ended", () => {
@@ -679,7 +689,7 @@ function chatOnChatUpdate(row) {
 
 // ---------- Поиск по переписке ----------
 
-let searchTimer = null;
+let searchTimer = null, searchSeq = 0;
 function toggleSearch() {
   const box = document.getElementById("cSearch"); if (!box) return;
   if (!box.hidden) { box.hidden = true; box.innerHTML = ""; return; }
@@ -693,9 +703,11 @@ function toggleSearch() {
 }
 async function runSearch(q) {
   const res = document.getElementById("csRes"); if (!res) return;
-  if (q.length < 2) { res.innerHTML = ""; return; }
+  if (q.length < 2) { searchSeq++; res.innerHTML = ""; return; }
   const like = "%" + q.replace(/[\\%_]/g, s => "\\" + s) + "%";
+  const seq = ++searchSeq;
   const r = await sb.from("messages").select("*").eq("chat_id", chat.open).ilike("text", like).order("created_at", { ascending: false }).limit(30);
+  if (seq !== searchSeq) return;   // пока искали, запрос уже поменяли — старый ответ не показываем
   const data = (r.data || []).filter(m => m.text);   // голосовые и опросы без текста в поиск не попадают
   const hl = s => esc(s).replace(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), x => `<mark>${x}</mark>`);
   res.innerHTML = data.length
@@ -714,6 +726,13 @@ async function jumpToMessage(id, createdAt) {
     ]);
     chat.messages = [...(older.data || []).reverse(), ...(newer.data || [])];
     chat.firstUnread = null;
+    // Реакции и голоса в опросах для подгруженных сообщений, иначе они показались бы пустыми
+    const ids = chat.messages.map(x => x.id), pollIds = chat.messages.filter(x => x.poll).map(x => x.id);
+    const [r, v] = await Promise.all([
+      ids.length ? sb.from("message_reactions").select("*").in("message_id", ids) : { data: [] },
+      pollIds.length ? sb.from("poll_votes").select("*").in("message_id", pollIds) : { data: [] }
+    ]);
+    chat.reacts = r.data || []; chat.votes = v.data || [];
     await chatSigned(chat.messages.flatMap(x => [x.image_path, x.audio_path]));
     document.getElementById("msgsIn").innerHTML = renderMessages(c);
     paintTicks();
@@ -919,11 +938,16 @@ async function deleteMessage(id) {
   const m = chat.messages.find(x => x.id === id); if (!m) return;
   const { error } = await sb.from("messages").delete().eq("id", id);
   if (error) { toast("Не получилось удалить"); return; }
-  if (m.image_path) sb.storage.from(CHAT_BUCKET).remove([m.image_path]);
+  // Файл фото или голосового тоже стираем, чтобы не занимал место
+  const files = [m.image_path, m.audio_path].filter(Boolean);
+  if (files.length) sb.storage.from(CHAT_BUCKET).remove(files);
   removeMessage(id);
 }
 function removeMessage(id) {
   chat.messages = chat.messages.filter(x => x.id !== id);
+  // Удалили закреплённое — полоска сверху тоже пропадает
+  const c = chat.list.find(x => x.id === chat.open);
+  if (c && c.pinned_message === id) { c.pinned_message = null; paintPin(c); }
   const el = document.querySelector(`[data-mid="${id}"]`);
   if (el) { el.classList.add("bye"); setTimeout(() => el.remove(), 280); }
 }
@@ -962,11 +986,14 @@ document.addEventListener("click", async e => {
   const sj = e.target.closest("[data-search-jump]"); if (sj) return jumpToMessage(sj.dataset.searchJump, sj.dataset.at);
   if (e.target.closest("[data-reply-cancel]")) return setReply(null);
   const zoom = e.target.closest("[data-zoom]");
-  if (zoom) return openLightbox(chatUrl(zoom.dataset.zoom));
+  if (zoom) { await chatSigned([zoom.dataset.zoom]); return openLightbox(chatUrl(zoom.dataset.zoom)); }
+  // Нажал на цитату в ответе — к исходному сообщению, даже если оно далеко в истории
   const jump = e.target.closest("[data-jump]");
   if (jump) {
-    const t = document.querySelector(`[data-mid="${jump.dataset.jump}"]`);
-    if (t) { t.scrollIntoView({ behavior: "smooth", block: "center" }); t.classList.remove("flash"); void t.offsetWidth; t.classList.add("flash"); }
+    const id = jump.dataset.jump;
+    if (document.querySelector(`[data-mid="${id}"]`)) return jumpToMessage(id);
+    const r = await sb.from("messages").select("created_at").eq("id", id).maybeSingle();
+    if (r.data) jumpToMessage(id, r.data.created_at);
     return;
   }
   if (e.target.closest("[data-addppl]")) return toggleAddPeople();
