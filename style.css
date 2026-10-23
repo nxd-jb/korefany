@@ -603,6 +603,21 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 .rec-bar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-radius: 999px; background: var(--panel); border: 1px solid rgba(255, 79, 109, .5); font-variant-numeric: tabular-nums; animation: rise .2s ease both; }
 .rec-dot { width: 10px; height: 10px; border-radius: 50%; background: #ff4f6d; box-shadow: 0 0 8px #ff4f6d; animation: blink 1s infinite; }
 .rec-hint { margin-left: auto; font-size: 13px; color: var(--muted); }
+/* Закрепление записи: тянешь вверх к замку — запись идёт без пальца, кнопка становится «отправить» */
+.composer.recording .rec-bar { margin-right: 56px; }
+.comp-row { position: relative; }
+.rec-lock { position: absolute; right: 2px; bottom: 62px; width: 40px; height: 66px; border-radius: 20px; background: var(--panel); border: 1px solid var(--line); color: var(--accent-2);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; pointer-events: none; opacity: 0; transform: translateY(10px); transition: opacity .2s, transform .2s; z-index: 2; }
+.rec-lock svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.rec-lock .rl-up { animation: rl-bob 1.1s ease-in-out infinite; }
+@keyframes rl-bob { 50% { transform: translateY(-4px); } }
+.composer.recording .rec-lock { opacity: 1; transform: translateY(calc(var(--lp, 0) * -14px)); border-color: rgba(62, 230, 255, calc(.2 + var(--lp, 0) * .8)); box-shadow: 0 0 calc(var(--lp, 0) * 18px) rgba(62, 230, 255, .6); }
+.composer.rec-locked .rec-lock { opacity: 0; transform: translateY(-20px); }
+.rec-cancel { display: none; margin-left: auto; background: none; border: 0; color: #ff4f6d; font: inherit; font-weight: 700; font-size: 14px; padding: 4px 6px; cursor: pointer; }
+.composer.rec-locked .rec-hint { display: none; }
+.composer.rec-locked .rec-cancel { display: block; }
+.composer.rec-locked .rec-bar { margin-right: 0; }
+.composer.rec-locked .c-send { background: var(--accent); border-color: var(--accent); transform: none; animation: none; box-shadow: 0 0 18px rgba(255, 79, 216, .7); }
 @keyframes blink { 50% { opacity: .2; } }
 
 /* Плеер голосового */
@@ -1259,9 +1274,10 @@ body.viewer-open { overflow: hidden; }
 }
 .pv-play { font-size: 40px; color: #fff; text-shadow: 0 0 20px rgba(0, 0, 0, .8); }
 .pv-slide img + .pv-play { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
-/* Плитка видео без картинки-превью: кадр показывает само видео */
-.tile-vid { width: 100%; display: block; aspect-ratio: 4 / 5; object-fit: cover; pointer-events: none; background: var(--panel-2); }
-.grid.sq .tile-vid { height: 100%; aspect-ratio: auto; }
+/* Плитка видео, пока превью делается: тёмная заготовка с мерцанием, потом сюда встаёт кадр */
+.tile img.vthumb:not([src]) { aspect-ratio: 4 / 5; object-fit: cover; background: linear-gradient(100deg, var(--panel-2) 30%, #2a2340 50%, var(--panel-2) 70%); background-size: 250% 100%; animation: shimmer 1.4s linear infinite; }
+.grid.sq .tile img.vthumb { height: 100%; object-fit: cover; }
+.pv-slide img.vthumb:not([src]) { display: none; }
 img.fade.now { transition: none; }
 .pv-dots { display: flex; justify-content: center; gap: 5px; padding: 10px 0 2px; min-height: 17px; }
 .pv-dots i { width: 6px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .3); transition: width .25s, background .25s; }

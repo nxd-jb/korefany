@@ -380,7 +380,7 @@ async function viewChat(id) {
       <form class="composer" id="composer">
         <div class="reply-bar" id="replyBar" hidden></div>
         <div class="poll-form" id="pollForm" hidden></div>
-        <div class="rec-bar" id="recBar" hidden><i class="rec-dot"></i><b id="recTime">0:00</b><span class="rec-hint">← свайп влево — отмена</span></div>
+        <div class="rec-bar" id="recBar" hidden><i class="rec-dot"></i><b id="recTime">0:00</b><span class="rec-hint">← отмена · ↑ закрепить</span><button type="button" class="rec-cancel" id="recCancel">Отмена</button></div>
         <div class="comp-row">
           <div class="attach-wrap">
             <button type="button" class="attach" id="attach" aria-label="Прикрепить">${CLIP_ICON}</button>
@@ -391,6 +391,7 @@ async function viewChat(id) {
           </div>
           <input type="file" id="chatFile" accept="image/*,.heic,.heif" hidden>
           <div class="pill"><textarea rows="1" maxlength="2000" placeholder="Сообщение..." aria-label="Сообщение"></textarea></div>
+          <div class="rec-lock" id="recLock" aria-hidden="true">${LOCK_ICON}<svg class="rl-up" viewBox="0 0 24 24"><path d="M7 14l5-5 5 5"/></svg></div>
           <button type="submit" class="c-send mic-mode" id="sendBtn" aria-label="Голосовое: зажми и говори">${MIC_ICON}</button>
         </div>
       </form>
@@ -576,6 +577,7 @@ function wireComposer(c) {
   file.onchange = async () => { const f = file.files[0]; file.value = ""; if (f) await sendMessage(c, { file: f }); };
 
   wireVoice(c, send);
+  document.getElementById("recCancel").onclick = () => { stopRecording(false); toast("Голосовое отменено"); };
   // Нажатие на «отправить» не забирает курсор из поля. Иначе на iPhone клавиатура на миг пряталась
   // и выезжала обратно — и вся переписка прыгала вверх-вниз
   const keepFocus = e => { if (!send.classList.contains("mic-mode")) e.preventDefault(); };
@@ -598,6 +600,8 @@ const CHECK_ICON = `<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/><
 
 function startEdit(m) {
   if (!m || m.author !== me() || !m.text) return;
+  // Во время записи голосового поле ввода спрятано — правку начать нельзя, иначе её не видно
+  if (rec) { toast("Сначала отправь или отмени голосовое"); return; }
   setReply(null);
   chat.editing = m.id;
   const bar = document.getElementById("replyBar"), ta = document.querySelector("#composer textarea");
@@ -657,28 +661,47 @@ function repaintMessage(m) {
   if (chat.list.find(x => x.id === chat.open)?.pinned_message === m.id) paintPin(c);
 }
 
-// ---------- Голосовые: зажал микрофон — пишешь, отпустил — отправилось, свайп влево — отмена ----------
+// ---------- Голосовые: зажал микрофон — пишешь, отпустил — отправилось, свайп влево — отмена,
+// свайп вверх — запись закрепляется (как в Telegram): палец можно убрать, отправка — кнопкой ----------
 
 // Меню скрепки закрывается нажатием в любом другом месте
 document.addEventListener("click", e => { if (!e.target.closest(".attach-wrap")) document.getElementById("attachMenu")?.setAttribute("hidden", ""); });
 
+const LOCK_ICON = `<svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`;
+const LOCK_AT = 70;   // на сколько пикселей потянуть вверх
 let rec = null;
 function wireVoice(c, btn) {
-  let pressing = false, sx = 0;
+  let pressing = false, sx = 0, sy = 0;
   btn.addEventListener("contextmenu", e => { if (btn.classList.contains("mic-mode")) e.preventDefault(); });
   btn.addEventListener("pointerdown", async e => {
     if (!btn.classList.contains("mic-mode")) return;
     e.preventDefault();
-    pressing = true; sx = e.clientX;
+    // Запись закреплена — нажатие на кнопку отправляет
+    if (rec?.locked) { stopRecording(true); return; }
+    if (rec) return;
+    pressing = true; sx = e.clientX; sy = e.clientY;
     try { btn.setPointerCapture(e.pointerId); } catch (err) {}
     await startRecording(c, () => pressing);
   });
   btn.addEventListener("pointermove", e => {
-    if (rec && e.clientX < sx - 80) { stopRecording(false); navigator.vibrate?.(20); toast("Голосовое отменено"); }
+    if (!rec || rec.locked || !pressing) return;
+    if (e.clientX < sx - 80) { stopRecording(false); navigator.vibrate?.(20); toast("Голосовое отменено"); return; }
+    const up = Math.max(0, sy - e.clientY);
+    document.getElementById("recLock")?.style.setProperty("--lp", Math.min(1, up / LOCK_AT));
+    if (up >= LOCK_AT) lockRecording();
   });
-  const up = () => { if (!pressing) return; pressing = false; if (rec) stopRecording(true); };
+  const up = () => { if (!pressing) return; pressing = false; if (rec && !rec.locked) stopRecording(true); };
   btn.addEventListener("pointerup", up);
   btn.addEventListener("pointercancel", up);
+}
+
+function lockRecording() {
+  if (!rec || rec.locked) return;
+  rec.locked = true;
+  navigator.vibrate?.(25);
+  document.getElementById("composer")?.classList.add("rec-locked");
+  const send = document.getElementById("sendBtn");
+  if (send) { send.innerHTML = SEND_ICON; send.setAttribute("aria-label", "Отправить голосовое"); }
 }
 
 async function startRecording(c, stillPressed) {
@@ -695,6 +718,11 @@ async function startRecording(c, stillPressed) {
   const chunks = [];
   mr.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   rec = { c, mr, stream, chunks, start: Date.now(), mime: mr.mimeType || mime || "audio/webm" };
+  // Микрофон отключился сам (iPhone свернул приложение, звонок, ошибка записи) — отправляем то, что успели записать.
+  // С закреплённой записью это реально: палец не держит экран, и приложение можно свернуть
+  const lost = () => { if (rec?.mr === mr) stopRecording(true); };
+  stream.getAudioTracks().forEach(t => t.addEventListener("ended", lost));
+  mr.onerror = lost;
   mr.start(250);
   navigator.vibrate?.(15);
   // Полоска записи: красная точка и таймер. Больше 2 минут не пишем
@@ -714,15 +742,22 @@ function stopRecording(send) {
   clearInterval(r.timer);
   document.getElementById("recBar")?.setAttribute("hidden", "");
   document.getElementById("recTime") && (document.getElementById("recTime").textContent = "0:00");
-  document.getElementById("composer")?.classList.remove("recording");
-  r.mr.onstop = async () => {
+  document.getElementById("composer")?.classList.remove("recording", "rec-locked");
+  document.getElementById("recLock")?.style.removeProperty("--lp");
+  const btn = document.getElementById("sendBtn");
+  if (r.locked && btn) { btn.innerHTML = MIC_ICON; btn.setAttribute("aria-label", "Голосовое: зажми и говори"); }
+  const dur = (Date.now() - r.start) / 1000;
+  const finish = async () => {
     r.stream.getTracks().forEach(t => t.stop());
-    const dur = (Date.now() - r.start) / 1000;
     if (!send) return;
     if (dur < 0.8) { toast("Слишком коротко. Зажми и говори"); return; }
+    if (!r.chunks.length) { toast("Голосовое не записалось — попробуй ещё раз"); return; }
     await sendMessage(r.c, { audio: new Blob(r.chunks, { type: r.mime }), duration: Math.round(dur * 10) / 10 });
   };
-  r.mr.stop();
+  // Запись уже остановилась сама — события stop больше не будет, отправляем сразу
+  if (r.mr.state === "inactive") { finish(); return; }
+  r.mr.onstop = finish;
+  try { r.mr.stop(); } catch (e) { finish(); }
 }
 
 // Плеер голосового: кнопка ▶, «волна» из полосок (своя у каждого сообщения) и время

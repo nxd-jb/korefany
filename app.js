@@ -162,7 +162,6 @@ async function loadAll() {
   // Если таблицу цитат ещё не создали, остальной сайт всё равно работает
   state.quotesReady = !q.error;
   state.quotes = q.data || [];
-  if (!thumbBackfillDone) setTimeout(() => backfillVideoThumbs().catch(() => {}), 6000);
 }
 
 // ---------- Сохранённые данные: сайт открывается сразу, а свежие данные догружаются следом ----------
@@ -375,8 +374,6 @@ function countBy(list, key) {
 async function grid(list, emptyHtml, square = false) {
   if (!list.length) return `<div class="empty">${emptyHtml}</div>`;
   await signed(list.map(m => thumbPath(m)));
-  // У видео без превью кадр показывает само видео (браузер берёт его с полсекунды) — нужна ссылка на файл
-  await signed(list.filter(m => m.kind === "video" && !url(thumbPath(m))).map(m => m.path));
   // Считаем реакции и комментарии один раз на всю сетку, а не перебираем все реакции для каждой плитки
   const rcOf = countBy(state.mr, "media_id"), ccOf = countBy(state.comments, "media_id");
   return `<div class="grid${square ? " sq" : ""}">${list.map((m, i) => {
@@ -384,9 +381,10 @@ async function grid(list, emptyHtml, square = false) {
     const rc = rcOf.get(m.id) || 0;
     const cc = ccOf.get(m.id) || 0;
     return `<button type="button" class="tile" style="--i:${Math.min(i, 20)}" data-open="${m.id}" aria-label="${esc(m.caption || "Открыть")}">
-      ${t ? `<img class="fade" src="${t}" alt="" loading="lazy" decoding="async">`
-        : m.kind === "video" && url(m.path) ? `<video class="tile-vid" src="${url(m.path)}#t=0.5" muted playsinline preload="metadata" tabindex="-1"></video>`
-        : `<span class="noimg">${m.kind === "video" ? "▶" : "🖼"}</span>`}
+      ${m.kind === "video"
+        // Превью видео проверяет fixVideoThumbs: нет или чёрное — сделает новое и подставит
+        ? `<img class="${t ? "fade " : ""}vthumb" ${t ? `src="${t}"` : ""} data-vthumb="${m.id}" alt="" loading="lazy" decoding="async">`
+        : t ? `<img class="fade" src="${t}" alt="" loading="lazy" decoding="async">` : `<span class="noimg">🖼</span>`}
       ${m.kind === "video" ? `<span class="play">▶ видео</span>` : ""}
       ${rc || cc ? `<span class="rc">${rc ? `🔥 ${rc}` : ""}${rc && cc ? " · " : ""}${cc ? `💬 ${cc}` : ""}</span>` : ""}
     </button>`;
@@ -479,12 +477,10 @@ function postHtml(m, i = 0) {
   </article>`;
 }
 
-// Видео с превью-картинкой. Если превью нет (старое видео с iPhone), видео само показывает кадр с полсекунды
+// Видео с превью-картинкой. Нет превью или оно чёрное — fixVideoThumbs сделает новое и поставит в poster
 function videoTag(m, attrs) {
   const poster = url(thumbPath(m));
-  return poster
-    ? `<video src="${url(m.path)}" poster="${poster}" ${attrs} preload="none"></video>`
-    : `<video src="${url(m.path)}#t=0.5" ${attrs} preload="metadata"></video>`;
+  return `<video src="${url(m.path)}" ${poster ? `poster="${poster}"` : ""} data-vthumb="${m.id}" ${attrs} preload="none"></video>`;
 }
 
 // Фото в посте проявляется: сначала видно размытое маленькое превью (оно лёгкое и грузится мгновенно),
@@ -1418,7 +1414,7 @@ async function openViewer(id, dir = 0, fromEl = null) {
     ${idx > 0 ? `<button class="btn nav-btn prev" data-go="${list[idx - 1].id}" data-dir="-1" aria-label="Предыдущее">←</button>` : ""}
     ${idx < list.length - 1 ? `<button class="btn nav-btn next" data-go="${list[idx + 1].id}" data-dir="1" aria-label="Следующее">→</button>` : ""}
     <div class="media${dir ? (dir > 0 ? " from-right" : " from-left") : ""}">${m.kind === "video"
-      ? `<video src="${url(m.path)}" poster="${url(thumbPath(m))}" controls autoplay playsinline></video>`
+      ? `<video src="${url(m.path)}" poster="${url(thumbPath(m))}" data-vthumb="${m.id}" controls autoplay playsinline></video>`
       : `<img src="${url(m.path)}" alt="${esc(m.caption)}">`}</div>
     <aside class="info">
       ${m.caption ? `<p class="caption">${esc(m.caption)}</p>` : ""}
@@ -1464,8 +1460,8 @@ function pvSlide(x, cur = false) {
   if (!x) return `<div class="pv-slide empty"></div>`;
   return `<div class="pv-slide${cur ? " media" : ""}" data-pv-id="${x.id}" style="background-image:url('${url(thumbPath(x))}')">${
     x.kind === "video" && cur
-      ? `<video src="${url(x.path)}" poster="${url(thumbPath(x))}" controls autoplay playsinline></video>`
-      : x.kind === "video" ? (url(thumbPath(x)) ? `<img src="${url(thumbPath(x))}" alt="" draggable="false">` : "") + `<span class="pv-play">▶</span>`
+      ? `<video src="${url(x.path)}" poster="${url(thumbPath(x))}" data-vthumb="${x.id}" controls autoplay playsinline></video>`
+      : x.kind === "video" ? `<img class="vthumb" ${url(thumbPath(x)) ? `src="${url(thumbPath(x))}"` : ""} data-vthumb="${x.id}" alt="" draggable="false"><span class="pv-play">▶</span>`
       : `<img class="fade" src="${url(midPath(x)) || url(x.path)}" alt="${esc(x.caption || "")}" draggable="false">`}</div>`;
 }
 function pvTop(m, list, idx) {
@@ -2013,26 +2009,41 @@ async function cropSquare(file, size) {
   return new Promise(res => c.toBlob(res, "image/jpeg", 0.88));
 }
 
+// Почти чёрная картинка? (средняя яркость мала и нет ни одной светлой точки)
+// iPhone иногда отдаёт кадр, который ещё не успел отрисоваться, — получается чёрный прямоугольник вместо превью
+function isBlackCanvas(src, w, h) {
+  try {
+    const c = document.createElement("canvas"); c.width = 24; c.height = 24;
+    const g = c.getContext("2d"); g.drawImage(src, 0, 0, w || src.width, h || src.height, 0, 0, 24, 24);
+    const d = g.getImageData(0, 0, 24, 24).data;
+    let sum = 0, max = 0;
+    for (let i = 0; i < d.length; i += 4) { const l = (d[i] * 2 + d[i + 1] * 3 + d[i + 2]) / 6; sum += l; if (l > max) max = l; }
+    return sum / (d.length / 4) < 14 && max < 45;
+  } catch (e) { return false; }   // не смогли прочитать — считаем, что всё нормально
+}
+
 // Кадр из видео для превью (на 1-й секунде или в середине короткого видео).
 // iPhone не грузит видео, которого нет на странице, — поэтому вставляем его невидимым и «включаем» без звука.
-// source — файл (при загрузке) или ссылка (для старых видео без превью). Не получилось — null, будет ▶
+// Если кадр вышел чёрным (не успел отрисоваться или видео начинается с темноты) — пробуем чуть дальше, до 4 раз.
+// source — файл (при загрузке) или ссылка. Не получилось — null
 function videoThumb(source) {
   return new Promise(resolve => {
     const v = document.createElement("video");
     const isFile = source instanceof Blob;
     const src = isFile ? URL.createObjectURL(source) : source;
-    let finished = false;
+    let finished = false, tries = 0;
     const done = blob => {
       if (finished) return; finished = true;
       clearTimeout(timer); v.pause(); v.removeAttribute("src"); v.load(); v.remove();
       if (isFile) URL.revokeObjectURL(src);
       resolve(blob);
     };
-    const timer = setTimeout(() => done(null), 15000);
+    const timer = setTimeout(() => done(null), 20000);
     v.muted = true; v.defaultMuted = true; v.playsInline = true; v.setAttribute("playsinline", ""); v.preload = "auto";
     if (!isFile) v.crossOrigin = "anonymous";   // чужой адрес: без этого кадр нельзя сохранить в картинку
     v.style.cssText = "position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none";
     document.body.appendChild(v);
+    const len = () => (isFinite(v.duration) && v.duration > 0 ? v.duration : 3);
     const grab = () => {
       if (finished || !v.videoWidth) return;
       try {
@@ -2040,38 +2051,84 @@ function videoThumb(source) {
         const c = document.createElement("canvas");
         c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k);
         c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+        if (isBlackCanvas(c) && ++tries < 4) {
+          // Чёрный кадр — ещё раз чуть дальше по видео
+          try { v.currentTime = Math.min(len() - 0.05, v.currentTime + Math.max(0.4, len() / 5)); } catch (e) { done(null); }
+          return;
+        }
+        if (isBlackCanvas(c)) return done(null);   // так и не получилось — пусть лучше будет заглушка, чем чёрный квадрат
         c.toBlob(b => done(b), "image/jpeg", 0.8);
       } catch (e) { done(null); }
     };
     v.onloadedmetadata = () => {
-      const at = Math.min(1, (isFinite(v.duration) && v.duration ? v.duration : 2) / 3);
       // Safari рисует кадр только после того, как видео хоть раз «поиграло» — коротко включаем и сразу ставим на паузу
       const p = v.play(); if (p) p.then(() => v.pause()).catch(() => {});
-      try { v.currentTime = at; } catch (e) {}
+      try { v.currentTime = Math.min(1, len() / 3); } catch (e) {}
     };
-    v.onseeked = () => setTimeout(grab, 120);
+    v.onseeked = () => setTimeout(grab, 150);
     v.onerror = () => done(null);
     v.src = src;
     v.load();
   });
 }
 
-// Старые видео без превью (снятые на iPhone до починки): их хозяин, когда заходит на сайт,
-// тихо делает превью в фоне — по одному, чтобы не грузить телефон
-let thumbBackfillDone = false;
-async function backfillVideoThumbs() {
-  if (thumbBackfillDone || !me()) return;
-  thumbBackfillDone = true;
-  const mine = state.media.filter(m => m.kind === "video" && m.owner === me());
-  if (!mine.length) return;
-  await signed(mine.flatMap(m => [m.path, thumbPath(m)]));
-  for (const m of mine.filter(m => !url(thumbPath(m))).slice(0, 10)) {
-    const blob = await videoThumb(url(m.path));
-    if (!blob) continue;
-    const { error } = await sb.storage.from(BUCKET).upload(thumbPath(m), blob, { contentType: "image/jpeg" });
-    if (!error) delete state.urls[thumbPath(m)];   // при следующей отрисовке ссылка возьмётся заново
-  }
+// ---------- Починка превью видео ----------
+// У видео, загруженных с iPhone до починки, превью либо нет, либо оно чёрное.
+// Сайт проверяет превью каждого видео на экране: нет или чёрное — делает кадр сам, на этом устройстве,
+// и сразу подставляет. Если видео твоё — заодно сохраняет новое превью в хранилище, чтобы у всех было нормально
+const vthumbLocal = {};   // id видео → готовое превью (blob-ссылка), чтобы не делать дважды
+let vthumbQueue = Promise.resolve();
+const vthumbQueued = new Set();
+const vthumbFixedKey = "korefany-vthumb-fixed";
+const vthumbFixed = (() => { try { return new Set(JSON.parse(localStorage.getItem(vthumbFixedKey) || "[]")); } catch (e) { return new Set(); } })();
+
+function applyVthumb(el, u) {
+  if (el.tagName === "VIDEO") el.poster = u;
+  else { el.src = u; el.classList.add("loaded"); el.closest(".tile, .pv-slide")?.classList.add("has-vthumb"); }
 }
+
+function queueVthumb(m, replace) {
+  if (vthumbQueued.has(m.id)) return;
+  vthumbQueued.add(m.id);
+  vthumbQueue = vthumbQueue.then(async () => {
+    await signed([m.path]);
+    const blob = await videoThumb(url(m.path));
+    if (!blob) return;
+    const u = vthumbLocal[m.id] = URL.createObjectURL(blob);
+    document.querySelectorAll(`[data-vthumb="${m.id}"]`).forEach(el => applyVthumb(el, u));
+    // Своё видео — сохраняем новое превью для всех (один раз на устройство)
+    if (m.owner !== me() || vthumbFixed.has(m.id)) return;
+    const tp = thumbPath(m);
+    if (replace) await sb.storage.from(BUCKET).remove([tp]);
+    const { error } = await sb.storage.from(BUCKET).upload(tp, blob, { contentType: "image/jpeg" });
+    if (error) return;
+    vthumbFixed.add(m.id);
+    try { localStorage.setItem(vthumbFixedKey, JSON.stringify([...vthumbFixed])); } catch (e) {}
+    delete state.urls[tp];
+    // В памяти телефона (sw.js) лежит старое чёрное превью — убираем, чтобы взялось новое
+    try { (await caches.open("korefany-pics-v1")).delete(`https://pics.korefany/${BUCKET}/${tp}`); } catch (e) {}
+  }).catch(() => {});
+}
+
+function fixVideoThumbs() {
+  document.querySelectorAll("[data-vthumb]:not([data-vchecked])").forEach(el => {
+    el.dataset.vchecked = "1";
+    const id = el.dataset.vthumb, m = state.media.find(x => x.id === id); if (!m) return;
+    if (vthumbLocal[id]) return applyVthumb(el, vthumbLocal[id]);
+    const t = url(thumbPath(m));
+    if (!t) return queueVthumb(m, false);
+    // Превью есть — проверяем, не чёрное ли оно (отдельная загрузка с разрешением на чтение пикселей)
+    const probe = new Image();
+    probe.crossOrigin = "anonymous";
+    probe.onload = () => { if (isBlackCanvas(probe, probe.naturalWidth, probe.naturalHeight)) queueVthumb(m, true); };
+    probe.onerror = () => queueVthumb(m, false);
+    probe.src = t;
+  });
+}
+// Видео появляются на странице в разных местах (лента, галерея, профиль, просмотр) — следим за всеми
+let vthumbTimer = null;
+new MutationObserver(() => { clearTimeout(vthumbTimer); vthumbTimer = setTimeout(fixVideoThumbs, 400); })
+  .observe(document.body, { childList: true, subtree: true });
 
 // ---------- Переключение страниц ----------
 
@@ -2500,7 +2557,8 @@ async function checkUpdate() {
     const v = +(html.match(/app\.js\?v=(\d+)/) || [])[1];
     if (!v || v <= APP_VERSION) return;
     // Если человек что-то пишет, не перезагружаем под рукой, а предлагаем кнопкой
-    const typing = [...document.querySelectorAll("textarea, input[type=text]")].some(x => x.value.trim());
+    const typing = [...document.querySelectorAll("textarea, input[type=text]")].some(x => x.value.trim()) ||
+      (typeof rec !== "undefined" && rec);   // идёт запись голосового — тоже не перезагружаем
     if (typing) toast("Вышла новая версия сайта", "Обновить", () => location.reload());
     else location.reload();
   } catch (e) {}
