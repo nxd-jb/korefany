@@ -452,6 +452,7 @@ async function appendPosts() {
   // их ловишь полупрозрачными и с задержкой
   if (f.shown > part.length) html = html.replaceAll(`<article class="post"`, `<article class="post quiet"`);
   feed.insertAdjacentHTML("beforeend", html);
+  keepNear(feed);
   const more = document.getElementById("feedMore");
   if (more) more.textContent = f.shown < f.list.length ? "Загружаю ещё..." : "Это всё. Дальше история только начинается 🔥";
   // Низ ленты всё ещё на экране (короткие посты или быстрая прокрутка) — догружаем следующую порцию сами
@@ -519,6 +520,7 @@ function rememberSize(id, w, h) {
 // Заодно запоминаем пропорции фото из поста
 document.addEventListener("load", e => {
   const el = e.target;
+  if (el.dataset?.sleep) return;   // это заглушка уснувшего поста, а не фото
   if (el.classList?.contains("fade")) el.classList.add("loaded");
   if (el.tagName === "IMG" && !el.classList.contains("fade")) {
     const id = el.closest("[data-post-media]")?.dataset.postMedia;
@@ -529,6 +531,47 @@ document.addEventListener("loadedmetadata", e => {
   const id = e.target.closest?.("[data-post-media]")?.dataset.postMedia;
   if (id && e.target.videoWidth) { rememberSize(id, e.target.videoWidth, e.target.videoHeight); e.target.style.aspectRatio = `${e.target.videoWidth} / ${e.target.videoHeight}`; }
 }, true);
+
+// Посты далеко от экрана «засыпают»: фото и видео выгружаются, место под ними остаётся той же высоты.
+// Иначе на iPhone каждое долистанное фото копится в памяти, и после пары десятков постов
+// Safari убивает вкладку — выглядит так, будто сайт сам перезагрузился
+const BLANK = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+let feedKeeper = null;
+function keepNear(root) {
+  feedKeeper ??= new IntersectionObserver(es => es.forEach(e => e.isIntersecting ? wakeMedia(e.target) : sleepMedia(e.target)),
+    { rootMargin: "2000px 0px" });   // примерно три экрана телефона вверх и вниз остаются живыми
+  root.querySelectorAll("[data-post-media]:not([data-kept])").forEach(el => { el.dataset.kept = "1"; feedKeeper.observe(el); });
+}
+function sleepMedia(box) {
+  if (box.dataset.asleep) return;
+  const h = box.offsetHeight; if (!h) return;
+  box.dataset.asleep = "1";
+  box.style.height = h + "px";
+  box.querySelectorAll("img").forEach(img => {
+    img.dataset.src = img.getAttribute("src") || "";
+    img.dataset.sleep = "1";
+    img.src = BLANK;
+  });
+  box.querySelectorAll("video").forEach(v => {
+    v.pause();
+    v.dataset.src = v.getAttribute("src") || ""; v.dataset.poster = v.getAttribute("poster") || "";
+    v.removeAttribute("src"); v.removeAttribute("poster"); v.load();
+  });
+}
+function wakeMedia(box) {
+  if (!box.dataset.asleep) return;
+  delete box.dataset.asleep;
+  box.querySelectorAll("img[data-sleep]").forEach(img => { delete img.dataset.sleep; img.src = img.dataset.src; });
+  box.querySelectorAll("video").forEach(v => {
+    // Пока пост спал, fixVideoThumbs мог поставить новое превью — его не затираем
+    if (v.dataset.poster && !v.getAttribute("poster")) v.setAttribute("poster", v.dataset.poster);
+    if (v.dataset.src) v.setAttribute("src", v.dataset.src);
+  });
+  // Фото уже в кэше и встаёт почти сразу; высоту отпускаем, когда оно загрузится
+  const full = box.querySelector("img.full") || box.querySelector("img");
+  const free = () => { box.style.height = ""; };
+  if (!full || full.complete) free(); else { full.addEventListener("load", free, { once: true }); full.addEventListener("error", free, { once: true }); }
+}
 
 // Под постом — два последних комментария и ссылка на остальные
 function commentsPreview(m) {
@@ -1770,7 +1813,7 @@ document.addEventListener("click", e => {
 // Фото изменили — перерисовываем его везде, где оно сейчас на экране: пост в ленте и открытый просмотр
 function refreshMediaEverywhere(m) {
   const post = document.querySelector(`[data-post="${m.id}"]`);
-  if (post) { post.outerHTML = postHtml(m); pvShowLoaded(document.querySelector(`[data-post="${m.id}"]`)); }
+  if (post) { post.outerHTML = postHtml(m); pvShowLoaded(document.querySelector(`[data-post="${m.id}"]`)); if (feedKeeper) keepNear(document.getElementById("feed") || document); }
   if (state.viewing !== m.id) return;
   const pvInfoEl = document.querySelector(".viewer.pv .pv-info");
   if (pvInfoEl) pvInfoEl.innerHTML = pvInfo(m);
@@ -2197,6 +2240,7 @@ async function route() {
   closeViewer(true);
   clearInterval(coverTimer);   // ушли с ленты — обложка больше не листается
   feedObserver?.disconnect();  // и посты больше не подгружаем
+  feedKeeper?.disconnect(); feedKeeper = null;
   // Ссылки на аватарки и обложки живут час: если сайт открыт давно, тихо берём свежие
   await signed(state.profiles.flatMap(x => [x.avatar_path, x.cover_path]).filter(Boolean));
   if (typeof chatLeave === "function") chatLeave();   // вышли из переписки — меню снова видно
