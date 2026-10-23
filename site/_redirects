@@ -1,3 +1,0 @@
-# Обход блокировки: запросы на /sb/... Netlify сам пересылает в Supabase.
-# Так у корефана, чей провайдер режет supabase.co, всё работает через адрес сайта.
-/sb/*  https://jvyitolecgbldlxypwcz.supabase.co/:splat  200
