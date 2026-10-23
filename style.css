@@ -1154,7 +1154,9 @@ body.viewer-open { overflow: hidden; }
   background: radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--nc) 32%, #15111f), #0e0b16 72%);
   box-shadow: 0 0 22px color-mix(in srgb, var(--nc) 45%, transparent), inset 0 0 30px color-mix(in srgb, var(--nc) 14%, transparent);
 }
-.aw-back { transform: rotateY(180deg); }
+.aw-back { transform: rotateY(180deg); gap: 6px; padding: 16px 14px 14px; }
+/* Оборот плотнее, чтобы топ-5, правило и ссылка влезали в карточку целиком */
+.aw-back .aw-title { font-size: 13px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; flex: none; }
 /* Голографический блик, как у коллекционной карты (только у той, что в центре) */
 .aw-front::after {
   content: ""; position: absolute; inset: -50%; pointer-events: none;
@@ -1177,15 +1179,15 @@ body.viewer-open { overflow: hidden; }
 .aw-hint { margin-top: auto; font-size: 11px; color: var(--muted); letter-spacing: .06em; opacity: 0; transition: opacity .3s; }
 .aw.cur .aw-hint { opacity: 1; }
 /* Оборот: кто был рядом и за что награда */
-.aw-list { list-style: none; margin: 6px 0 0; padding: 0; width: 100%; display: grid; gap: 6px; }
-.aw-list li { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 10px; background: rgba(255, 255, 255, .04); border: 1px solid transparent; }
+.aw-list { list-style: none; margin: 4px 0 0; padding: 0; width: 100%; display: grid; gap: 4px; }
+.aw-list li { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 10px; background: rgba(255, 255, 255, .04); border: 1px solid transparent; }
 .aw-list li.win { background: color-mix(in srgb, var(--nc) 20%, transparent); border-color: var(--nc); }
-.aw-list .ava { width: 26px; height: 26px; font-size: 11px; }
+.aw-list .ava { width: 24px; height: 24px; font-size: 11px; flex: none; }
 .aw-place { width: 16px; font-family: var(--font-logo); font-size: 13px; color: var(--nc); text-align: center; }
 .aw-who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 .aw-list b { font-family: var(--font-logo); font-weight: 400; font-size: 14px; }
 .aw-empty { margin: auto 0; color: var(--muted); font-size: 14px; text-align: center; }
-.aw-rule { margin: auto 0 0; font-size: 12px; line-height: 1.4; color: var(--muted); text-align: center; }
+.aw-rule { margin: auto 0 0; font-size: 11.5px; line-height: 1.35; color: var(--muted); text-align: center; }
 .aw-link { font-size: 13px; font-weight: 700; color: var(--nc); text-decoration: none; }
 .aw-dots { display: flex; justify-content: center; gap: 6px; }
 .aw-dots i { width: 6px; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, .3); transition: width .3s, background .3s, box-shadow .3s; }
@@ -1199,7 +1201,7 @@ body.viewer-open { overflow: hidden; }
 @media (min-width: 1000px) {
   .aw-wrap { margin: 0; }
   .aw-track { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; overflow: visible; padding: 8px 0 4px; -webkit-mask-image: none; mask-image: none; }
-  .aw { width: auto; scale: 1; opacity: 1; }
+  .aw { width: auto; scale: 1; opacity: 1; aspect-ratio: 5 / 7; }
   .aw:hover .aw-face { box-shadow: 0 0 34px color-mix(in srgb, var(--nc) 65%, transparent), inset 0 0 30px color-mix(in srgb, var(--nc) 18%, transparent); }
   .aw:not(.cur) .aw-front::after { animation: aw-sheen 4.5s ease-in-out infinite; animation-delay: calc(var(--i, 0) * 1.1s); opacity: 1; }
   .aw .aw-ico { animation: aw-float 3s ease-in-out infinite; animation-delay: calc(var(--i, 0) * -.7s); }
