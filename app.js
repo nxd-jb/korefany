@@ -413,7 +413,7 @@ async function viewFeed() {
   feedObserver?.disconnect();
   feedObserver = new IntersectionObserver(async es => {
     if (es[0].isIntersecting && state.feed.shown < state.feed.list.length) await appendPosts();
-  }, { rootMargin: "800px" });
+  }, { rootMargin: "1600px" });   // догружаем заранее, примерно за два экрана телефона до конца
   feedObserver.observe(document.getElementById("feedMore"));
 }
 
@@ -448,11 +448,14 @@ async function appendPosts() {
     if (month !== f.lastMonth) { html += `<div class="feed-month"><span>${month}</span></div>`; f.lastMonth = month; }
     html += postHtml(m, i);
   });
+  // Выплывают только первые посты. Догруженные при прокрутке встают сразу, иначе при быстрой прокрутке
+  // их ловишь полупрозрачными и с задержкой
+  if (f.shown > part.length) html = html.replaceAll(`<article class="post"`, `<article class="post quiet"`);
   feed.insertAdjacentHTML("beforeend", html);
   const more = document.getElementById("feedMore");
   if (more) more.textContent = f.shown < f.list.length ? "Загружаю ещё..." : "Это всё. Дальше история только начинается 🔥";
   // Низ ленты всё ещё на экране (короткие посты или быстрая прокрутка) — догружаем следующую порцию сами
-  if (more && f.shown < f.list.length && more.getBoundingClientRect().top < innerHeight + 800) setTimeout(appendPosts, 50);
+  if (more && f.shown < f.list.length && more.getBoundingClientRect().top < innerHeight + 1600) setTimeout(appendPosts, 50);
 }
 
 function postHtml(m, i = 0) {
@@ -463,7 +466,7 @@ function postHtml(m, i = 0) {
       <button type="button" class="post-edit" data-edit-media="${m.id}" aria-label="${m.owner === me() ? "Изменить: кто на фото, подпись, дата" : "Отметить, кто на фото"}" title="${m.owner === me() ? "Изменить" : "Отметить, кто на фото"}">${m.owner === me() ? "✎" : "👥"}</button>
     </header>
     <div class="post-media" data-post-media="${m.id}">${m.kind === "video"
-      ? videoTag(m, "controls playsinline")
+      ? videoTag(m, `controls playsinline style="aspect-ratio:${mediaSize(m.id)?.join(" / ") || "4 / 5"}"`)
       : postPicture(m)}</div>
     <div class="post-body">
       <div class="post-actions">
@@ -485,14 +488,47 @@ function videoTag(m, attrs) {
 
 // Фото в посте проявляется: сначала видно размытое маленькое превью (оно лёгкое и грузится мгновенно),
 // поверх него плавно проступает чёткое фото, когда загрузится
+// Превью грузится сразу (оно маленькое), чтобы пост получил свою высоту до того, как до него долистали:
+// иначе пост сначала пустой, а потом резко вырастает, и лента дёргается
 function postPicture(m) {
   const t = url(thumbPath(m)), src = url(midPath(m)) || url(m.path), alt = esc(m.caption || "");
-  if (!t) return `<img class="full" src="${src}" alt="${alt}" loading="lazy" decoding="async">`;
-  return `<img class="ph" src="${t}" alt="" aria-hidden="true" loading="lazy">` +
+  const wh = mediaSize(m.id), size = wh ? ` width="${wh[0]}" height="${wh[1]}"` : "";
+  if (!t) return `<img class="full" src="${src}" alt="${alt}"${size} loading="lazy" decoding="async">`;
+  return `<img class="ph" src="${t}" alt="" aria-hidden="true"${size} decoding="async">` +
     `<img class="full fade" src="${src}" alt="${alt}" loading="lazy" decoding="async">`;
 }
-// Картинка с классом fade загрузилась — показываем её (одно правило на весь сайт)
-document.addEventListener("load", e => { if (e.target.classList?.contains("fade")) e.target.classList.add("loaded"); }, true);
+
+// Размеры фото и видео запоминаются на устройстве (korefany-ar: id → [ширина, высота] превью).
+// В следующий раз место под фото в ленте занято заранее, и при прокрутке ничего не прыгает
+const SIZES_KEY = "korefany-ar";
+let sizes = null, sizesTimer = null;
+function mediaSize(id) {
+  if (!sizes) { try { sizes = JSON.parse(localStorage.getItem(SIZES_KEY)) || {}; } catch { sizes = {}; } }
+  return sizes[id];
+}
+function rememberSize(id, w, h) {
+  if (!id || !w || !h || mediaSize(id)) return;
+  // Хватит точности до сотых: превью маленькое, а сохранённые числа не раздувают память
+  const k = 100 / Math.max(w, h);
+  sizes[id] = [Math.round(w * k), Math.round(h * k)];
+  clearTimeout(sizesTimer);
+  sizesTimer = setTimeout(() => { try { localStorage.setItem(SIZES_KEY, JSON.stringify(sizes)); } catch {} }, 1500);
+}
+
+// Картинка с классом fade загрузилась — показываем её (одно правило на весь сайт).
+// Заодно запоминаем пропорции фото из поста
+document.addEventListener("load", e => {
+  const el = e.target;
+  if (el.classList?.contains("fade")) el.classList.add("loaded");
+  if (el.tagName === "IMG" && !el.classList.contains("fade")) {
+    const id = el.closest("[data-post-media]")?.dataset.postMedia;
+    if (id) rememberSize(id, el.naturalWidth, el.naturalHeight);
+  }
+}, true);
+document.addEventListener("loadedmetadata", e => {
+  const id = e.target.closest?.("[data-post-media]")?.dataset.postMedia;
+  if (id && e.target.videoWidth) { rememberSize(id, e.target.videoWidth, e.target.videoHeight); e.target.style.aspectRatio = `${e.target.videoWidth} / ${e.target.videoHeight}`; }
+}, true);
 
 // Под постом — два последних комментария и ссылка на остальные
 function commentsPreview(m) {
