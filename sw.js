@@ -41,7 +41,7 @@ self.addEventListener("fetch", (e) => {
 
   // Файлы сайта и шрифты Google — сначала из памяти
   const same = u.origin === self.location.origin;
-  if ((same && (/[?&]v=\d+/.test(u.search) || /\/(vendor|icons|sounds)\//.test(u.pathname))) || u.hostname === "fonts.gstatic.com") {
+  if ((same && (/[?&]v=\d+/.test(u.search) || /\/(vendor|icons|sounds|emoji)\//.test(u.pathname))) || u.hostname === "fonts.gstatic.com") {
     e.respondWith(cacheFirst(req, same && /[?&]v=\d+/.test(u.search)));
     return;
   }

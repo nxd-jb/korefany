@@ -481,10 +481,66 @@ function jumboHtml(text) {
     ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text.trim())].map(s => s.segment).filter(s => s.trim())
     : Array.from(text.replace(/\s/g, ""));
   return parts.map((p, i) => {
+    const code = lottieCode(p);
+    if (code) return `<span class="je je-lottie" data-lottie="${code}"><span class="je-fb">${esc(p)}</span></span>`;
     const kind = (LIVE_EMOJI.find(([re]) => re.test(p)) || [, "bob"])[1];
     return `<span class="je je-${kind}" style="--d:${i * .18}s">${esc(p)}</span>`;
   }).join("");
 }
+
+// Анимированные эмодзи как в Telegram: Lottie из Noto Animated Emoji (site/emoji/<код>.json).
+// Пока проигрыватель и анимация грузятся, виден обычный эмодзи (.je-fb); не загрузилось — так и остаётся.
+// Как в Telegram: проигрывается один раз, когда впервые попал на экран, а нажатие запускает снова.
+const LOTTIE_EMOJI = new Set(("1f37b 1f389 1f440 1f44b 1f44d 1f44e 1f44f 1f480 1f494 1f4a9 1f4aa 1f4af 1f525 1f601 1f602 1f605 " +
+  "1f609 1f60a 1f60b 1f60d 1f60e 1f60f 1f618 1f621 1f62d 1f62e 1f631 1f634 1f642 1f644 1f648 1f64f 1f911 1f914 1f919 1f91d " +
+  "1f921 1f923 1f92e 1f92f 1f970 1f972 1f973 1f975 1f976 1f97a 2728 2764_fe0f").split(" "));
+function lottieCode(p) {
+  const code = Array.from(p).map(ch => ch.codePointAt(0).toString(16)).join("_");
+  if (LOTTIE_EMOJI.has(code)) return code;
+  const bare = code.replace(/_fe0f/g, "");
+  return LOTTIE_EMOJI.has(bare) ? bare : LOTTIE_EMOJI.has(bare + "_fe0f") ? bare + "_fe0f" : null;
+}
+const lottieJson = new Map();   // код → текст JSON (lottie портит переданный объект, поэтому каждому свой JSON.parse)
+const lottieLive = new Set();   // { el, anim, played } — чтобы запускать при появлении на экране и убирать удалённые
+let lottieIO = null, lottieScan = 0;
+function lottieData(code) {
+  if (!lottieJson.has(code)) lottieJson.set(code, fetch(`emoji/${code}.json`).then(r => { if (!r.ok) throw new Error(r.status); return r.text(); }));
+  return lottieJson.get(code);
+}
+async function hydrateLottie() {
+  for (const it of lottieLive) if (!it.el.isConnected) { it.anim.destroy(); lottieIO?.unobserve(it.el); lottieLive.delete(it); }
+  const els = [...document.querySelectorAll("[data-lottie]:not([data-lot])")];
+  if (!els.length) return;
+  els.forEach(el => el.dataset.lot = "1");
+  try { await loadScript("vendor/lottie_light.min.js?v=1"); } catch { return; }
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  lottieIO ||= new IntersectionObserver(entries => entries.forEach(e => {
+    const it = lottieItem(e.target);
+    if (!it || !e.isIntersecting || it.played) return;
+    it.played = true; lottieIO.unobserve(it.el);
+    if (!still) it.anim.goToAndPlay(0, true);
+  }));
+  for (const el of els) {
+    lottieData(el.dataset.lottie).then(txt => {
+      if (!el.isConnected) return;
+      const box = document.createElement("span"); box.className = "je-anim";
+      el.appendChild(box);
+      const anim = lottie.loadAnimation({ container: box, renderer: "svg", loop: false, autoplay: false, animationData: JSON.parse(txt) });
+      anim.addEventListener("DOMLoaded", () => { el.classList.add("lot-on"); anim.goToAndStop(0, true); });
+      lottieLive.add({ el, anim, played: false }); lottieIO.observe(el);
+    }).catch(() => lottieJson.delete(el.dataset.lottie));
+  }
+}
+const lottieItem = el => { for (const it of lottieLive) if (it.el === el) return it; };
+// Нажатие на анимированный эмодзи — проиграть ещё раз (меню сообщения при этом не открывается, оно по долгому нажатию)
+function replayLottie(el) {
+  const it = lottieItem(el); if (!it) return false;
+  it.played = true; lottieIO?.unobserve(el);
+  it.anim.goToAndPlay(0, true);
+  return true;
+}
+new MutationObserver(() => { clearTimeout(lottieScan); lottieScan = setTimeout(hydrateLottie, 60); })
+  .observe(document.documentElement, { childList: true, subtree: true });
 
 // next: следующее сообщение. Если оно из того же блока, у этого нет «хвостика» и аватарки
 function msgHtml(m, prev, c, isNew = false, next = null) {
@@ -1376,6 +1432,8 @@ document.addEventListener("click", async e => {
   }
   // Сразу после долгого нажатия браузер присылает ещё и обычное нажатие — его пропускаем, иначе меню тут же закроется
   if (Date.now() - longPressAt < 600) return;
+  const lot = e.target.closest(".je-lottie.lot-on");
+  if (lot && !document.querySelector(".msg.active") && replayLottie(lot)) return;
   // Нажатие на пузырь показывает реакции и «Ответить»
   const bubble = e.target.closest("[data-bubble]");
   document.querySelectorAll(".msg.active").forEach(x => { if (!bubble || x !== bubble.closest(".msg")) x.classList.remove("active"); });

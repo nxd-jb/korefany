@@ -515,6 +515,13 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 .je-clap { animation: je-clap 2.2s ease-in-out infinite; animation-delay: var(--d); }
 .je-cry { transform-origin: 50% 100%; animation: je-cry 2.6s ease-in-out infinite; animation-delay: var(--d); }
 .je-bob { animation: je-bob 3s ease-in-out infinite; animation-delay: var(--d); }
+/* Анимированные эмодзи (Lottie): квадрат чуть больше буквы, до загрузки виден обычный эмодзи */
+.je-lottie { position: relative; width: 1.25em; height: 1.25em; vertical-align: bottom; text-align: center; line-height: 1.25em; }
+.je-lottie .je-anim { position: absolute; inset: 0; opacity: 0; transition: opacity .2s; }
+.je-lottie .je-anim svg { display: block; }
+.je-lottie.lot-on .je-anim { opacity: 1; }
+.je-lottie.lot-on { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.je-lottie.lot-on .je-fb { visibility: hidden; }
 @keyframes je-fire {
   0%, 100% { transform: scale(1, 1) skewX(0); filter: drop-shadow(0 0 6px rgba(255, 140, 40, .6)); }
   25% { transform: scale(.96, 1.08) skewX(-3deg); filter: drop-shadow(0 -2px 12px rgba(255, 120, 30, .9)); }
