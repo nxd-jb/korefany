@@ -2411,7 +2411,7 @@ function countUp(root = document) {
   document.body.prepend(g);
   let x = innerWidth / 2, y = innerHeight / 2, gx = x, gy = y, raf = 0;
   const step = () => {
-    gx += (x - gx) * 0.12; gy += (y - gy) * 0.12;   // догоняет с небольшой задержкой — так свечение «плывёт»
+    gx += (x - gx) * 0.35; gy += (y - gy) * 0.35;   // догоняет почти сразу, с лёгкой мягкой задержкой
     g.style.transform = `translate3d(${gx.toFixed(1)}px, ${gy.toFixed(1)}px, 0)`;
     raf = Math.abs(x - gx) + Math.abs(y - gy) > 0.5 ? requestAnimationFrame(step) : 0;
   };

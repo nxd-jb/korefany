@@ -97,8 +97,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 @keyframes sp-load { 70% { width: 80%; } to { width: 100%; } }
 
 /* ---------- Свечение за курсором (только компьютер с мышкой) ---------- */
-.cursor-glow { position: fixed; left: 0; top: 0; z-index: -1; width: 520px; height: 520px; margin: -260px 0 0 -260px; border-radius: 50%; pointer-events: none;
-  background: radial-gradient(closest-side, rgba(255, 79, 216, .2), rgba(140, 90, 255, .08) 55%, transparent); opacity: 0; transition: opacity .5s; will-change: transform; }
+/* Маленький аккуратный ореол чуть больше курсора (Костя: большое пятно — слишком). Поверх страницы,
+   с режимом наложения screen — на тёмном светится, на светлом почти не видно, нажатиям не мешает */
+.cursor-glow { position: fixed; left: 0; top: 0; z-index: 300; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; pointer-events: none; mix-blend-mode: screen;
+  background: radial-gradient(closest-side, rgba(255, 79, 216, .45), rgba(255, 79, 216, .15) 60%, transparent); opacity: 0; transition: opacity .3s; will-change: transform; }
 .cursor-glow.on { opacity: 1; }
 /* Без анимаций (настройка «Уменьшение движения») — вывеска сразу горит */
 @media (prefers-reduced-motion: reduce) {
