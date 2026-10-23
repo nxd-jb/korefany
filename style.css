@@ -96,17 +96,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 .sp-bar b { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); box-shadow: 0 0 8px var(--accent); animation: sp-load 2.4s cubic-bezier(.3, 0, .2, 1) forwards .2s; }
 @keyframes sp-load { 70% { width: 80%; } to { width: 100%; } }
 
-/* ---------- Свечение за курсором (только компьютер с мышкой) ---------- */
-/* Маленький аккуратный ореол чуть больше курсора (Костя: большое пятно — слишком). Поверх страницы,
-   с режимом наложения screen — на тёмном светится, на светлом почти не видно, нажатиям не мешает */
-.cursor-glow { position: fixed; left: 0; top: 0; z-index: 300; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; pointer-events: none; mix-blend-mode: screen;
-  background: radial-gradient(closest-side, rgba(255, 79, 216, .45), rgba(255, 79, 216, .15) 60%, transparent); opacity: 0; transition: opacity .3s; will-change: transform; }
-.cursor-glow.on { opacity: 1; }
 /* Без анимаций (настройка «Уменьшение движения») — вывеска сразу горит */
 @media (prefers-reduced-motion: reduce) {
   .sp-ring, .sp-ring1, .sp-ring2, .sp-glow1, .sp-glow2, .sp-core, .sp-reflect { opacity: var(--to, 1) !important; }
   .sp-word span { color: #ffe6fb; } .sp-word i { color: var(--accent-2); }
-  .cursor-glow { display: none; }
 }
 .sk-top { height: 52px; margin: 10px 16px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); }
 .sk-body { max-width: 1100px; margin: 0 auto; padding: 28px 16px; display: grid; gap: 28px; }
