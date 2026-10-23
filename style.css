@@ -266,6 +266,34 @@ textarea { min-height: 70px; max-height: 300px; resize: none; overflow-y: hidden
 
 .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 26px 16px; text-align: center; color: var(--muted); cursor: pointer; transition: border-color .2s, box-shadow .2s, color .2s; }
 .drop:hover, .drop.over { border-color: var(--accent); color: var(--fg); box-shadow: inset 0 0 30px rgba(255, 79, 216, .15); }
+.drop small { display: block; margin-top: 4px; font-size: 12px; opacity: .75; }
+/* Загрузка пачкой: сверху лента выбранных, ниже — текущее фото и его отметки */
+.up-editor { display: grid; gap: 14px; min-width: 0; }
+.up-strip { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 8px; scroll-snap-type: x proximity; overscroll-behavior-x: contain; }
+.up-thumb { position: relative; flex: none; width: 68px; height: 68px; padding: 0; border-radius: 12px; overflow: hidden; border: 2px solid transparent; background: var(--panel-2); cursor: pointer; scroll-snap-align: center; color: var(--muted); font-size: 11px; transition: border-color .2s, transform .2s; }
+.up-thumb img, .up-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+.up-thumb > span:not(.up-x) { display: grid; place-items: center; height: 100%; }
+.up-thumb.on { border-color: var(--accent); box-shadow: 0 0 12px rgba(255, 79, 216, .5); transform: scale(1.04); }
+.up-thumb.up-more { display: grid; place-items: center; font-size: 26px; color: var(--accent); border: 2px dashed var(--line); background: none; }
+.up-vid { position: absolute; left: 4px; bottom: 4px; font-style: normal; font-size: 10px; padding: 1px 5px; border-radius: 6px; background: rgba(0, 0, 0, .65); color: #fff; }
+.up-badge { position: absolute; right: 4px; bottom: 4px; font-style: normal; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 6px; background: var(--accent); color: #1a0717; }
+.up-x { position: absolute; right: 3px; top: 3px; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; background: rgba(0, 0, 0, .7); color: #fff; }
+.up-cur { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 16px; align-items: start; }
+.up-preview { border-radius: 14px; overflow: hidden; background: var(--panel-2); display: grid; place-items: center; min-height: 200px; max-height: 60vh; }
+.up-preview img, .up-preview video { width: 100%; max-height: 60vh; object-fit: contain; display: block; }
+.up-nopic { padding: 30px 16px; text-align: center; color: var(--muted); font-size: 13px; }
+.up-fields { display: grid; gap: 10px; min-width: 0; }
+.up-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.up-head b { font-family: var(--font-logo); font-weight: 400; font-size: 15px; }
+.up-label { font-weight: 700; }
+.up-quick { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+.up-form.uploading .up-editor { opacity: .5; pointer-events: none; }
+@media (max-width: 700px) {
+  .up-cur { grid-template-columns: minmax(0, 1fr); }
+  /* На телефоне превью небольшое, чтобы отметки и «→» были видны без прокрутки */
+  .up-preview { min-height: 120px; max-height: 30vh; }
+  .up-preview img, .up-preview video { max-height: 30vh; }
+}
 .picked { display: grid; grid-template-columns: repeat(auto-fill, minmax(72px, 1fr)); gap: 6px; }
 .picked div { aspect-ratio: 1; border-radius: 8px; background: var(--panel-2) center / cover; display: grid; place-items: center; font-size: 12px; color: var(--muted); animation: rise .3s ease both; }
 
@@ -1189,6 +1217,10 @@ body.viewer-open { overflow: hidden; }
   max-width: 100%; max-height: 100%; border-radius: 12px; box-shadow: none; animation: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
 .pv-play { font-size: 40px; color: #fff; text-shadow: 0 0 20px rgba(0, 0, 0, .8); }
+.pv-slide img + .pv-play { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+/* Плитка видео без картинки-превью: кадр показывает само видео */
+.tile-vid { width: 100%; display: block; aspect-ratio: 4 / 5; object-fit: cover; pointer-events: none; background: var(--panel-2); }
+.grid.sq .tile-vid { height: 100%; aspect-ratio: auto; }
 img.fade.now { transition: none; }
 .pv-dots { display: flex; justify-content: center; gap: 5px; padding: 10px 0 2px; min-height: 17px; }
 .pv-dots i { width: 6px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .3); transition: width .25s, background .25s; }

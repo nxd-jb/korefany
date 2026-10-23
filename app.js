@@ -162,6 +162,7 @@ async function loadAll() {
   // Если таблицу цитат ещё не создали, остальной сайт всё равно работает
   state.quotesReady = !q.error;
   state.quotes = q.data || [];
+  if (!thumbBackfillDone) setTimeout(() => backfillVideoThumbs().catch(() => {}), 6000);
 }
 
 // ---------- Сохранённые данные: сайт открывается сразу, а свежие данные догружаются следом ----------
@@ -374,6 +375,8 @@ function countBy(list, key) {
 async function grid(list, emptyHtml, square = false) {
   if (!list.length) return `<div class="empty">${emptyHtml}</div>`;
   await signed(list.map(m => thumbPath(m)));
+  // У видео без превью кадр показывает само видео (браузер берёт его с полсекунды) — нужна ссылка на файл
+  await signed(list.filter(m => m.kind === "video" && !url(thumbPath(m))).map(m => m.path));
   // Считаем реакции и комментарии один раз на всю сетку, а не перебираем все реакции для каждой плитки
   const rcOf = countBy(state.mr, "media_id"), ccOf = countBy(state.comments, "media_id");
   return `<div class="grid${square ? " sq" : ""}">${list.map((m, i) => {
@@ -381,7 +384,9 @@ async function grid(list, emptyHtml, square = false) {
     const rc = rcOf.get(m.id) || 0;
     const cc = ccOf.get(m.id) || 0;
     return `<button type="button" class="tile" style="--i:${Math.min(i, 20)}" data-open="${m.id}" aria-label="${esc(m.caption || "Открыть")}">
-      ${t ? `<img class="fade" src="${t}" alt="" loading="lazy" decoding="async">` : `<span class="noimg">${m.kind === "video" ? "▶" : "🖼"}</span>`}
+      ${t ? `<img class="fade" src="${t}" alt="" loading="lazy" decoding="async">`
+        : m.kind === "video" && url(m.path) ? `<video class="tile-vid" src="${url(m.path)}#t=0.5" muted playsinline preload="metadata" tabindex="-1"></video>`
+        : `<span class="noimg">${m.kind === "video" ? "▶" : "🖼"}</span>`}
       ${m.kind === "video" ? `<span class="play">▶ видео</span>` : ""}
       ${rc || cc ? `<span class="rc">${rc ? `🔥 ${rc}` : ""}${rc && cc ? " · " : ""}${cc ? `💬 ${cc}` : ""}</span>` : ""}
     </button>`;
@@ -460,7 +465,7 @@ function postHtml(m, i = 0) {
       <button type="button" class="post-edit" data-edit-media="${m.id}" aria-label="${m.owner === me() ? "Изменить: кто на фото, подпись, дата" : "Отметить, кто на фото"}" title="${m.owner === me() ? "Изменить" : "Отметить, кто на фото"}">${m.owner === me() ? "✎" : "👥"}</button>
     </header>
     <div class="post-media" data-post-media="${m.id}">${m.kind === "video"
-      ? `<video src="${url(m.path)}" poster="${url(thumbPath(m))}" controls playsinline preload="none"></video>`
+      ? videoTag(m, "controls playsinline")
       : postPicture(m)}</div>
     <div class="post-body">
       <div class="post-actions">
@@ -472,6 +477,14 @@ function postHtml(m, i = 0) {
       <div class="post-comments" data-cprev="${m.id}">${commentsPreview(m)}</div>
     </div>
   </article>`;
+}
+
+// Видео с превью-картинкой. Если превью нет (старое видео с iPhone), видео само показывает кадр с полсекунды
+function videoTag(m, attrs) {
+  const poster = url(thumbPath(m));
+  return poster
+    ? `<video src="${url(m.path)}" poster="${poster}" ${attrs} preload="none"></video>`
+    : `<video src="${url(m.path)}#t=0.5" ${attrs} preload="metadata"></video>`;
 }
 
 // Фото в посте проявляется: сначала видно размытое маленькое превью (оно лёгкое и грузится мгновенно),
@@ -946,76 +959,179 @@ function wireAwards() {
   paint();
 }
 
+// Загрузка пачкой: выбираешь сразу много фото и видео (хоть 30), потом листаешь их по одному
+// и у каждого отмечаешь, кто на нём, подпись и дату. «Как на прошлом» и «…всем» — чтобы не тыкать одно и то же 30 раз
+const isApple = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const localDay = ms => { const d = new Date(ms), p2 = n => String(n).padStart(2, "0"); return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`; };
+
 function viewUpload() {
+  // На iPhone в списке форматов только «image/*,video/*»: с расширениями (.heic) Safari открывал не галерею,
+  // а «Файлы» — там фото выбираются по одному. HEIC iPhone и так сам переводит в JPEG
+  const accept = isApple ? "image/*,video/*" : "image/*,video/*,.heic,.heif";
   shell("", `
-    <div><h1>Загрузить</h1><p class="sub">Фото сожмутся сами. Видео до ${KOREFANY.maxVideoMb} МБ.</p></div>
-    <form class="card" id="upForm">
-      <div class="drop" id="drop" tabindex="0">Нажми или перетащи сюда фото и видео</div>
-      <input type="file" id="files" accept="image/*,video/*,.heic,.heif" multiple hidden>
-      <div class="picked" id="picked"></div>
-      <label>Кто на них?
-        <div class="chips" id="tagChips">${state.profiles.map(p =>
-          `<button type="button" class="chip" data-tag="${p.id}" aria-pressed="false">${avatar(p.id)}${esc(p.name)}</button>`).join("")}</div>
-      </label>
-      <label>Подпись<textarea id="caption" maxlength="500" placeholder="Что тут происходит?"></textarea></label>
-      <label>Когда это было<input type="date" id="takenAt"></label>
+    <div><h1>Загрузить</h1><p class="sub">Выбери сразу сколько угодно фото и видео — потом пролистаешь их и отметишь, кто где. Фото сожмутся сами, видео до ${KOREFANY.maxVideoMb} МБ.</p></div>
+    <form class="card up-form" id="upForm">
+      <div class="drop" id="drop" tabindex="0" role="button">Нажми или перетащи сюда фото и видео<small>Можно выбрать сразу много</small></div>
+      <input type="file" id="files" accept="${accept}" multiple hidden>
+      <div class="up-editor" id="upEditor" hidden>
+        <div class="up-strip" id="upStrip"></div>
+        <div class="up-cur">
+          <div class="up-preview" id="upPrev"></div>
+          <div class="up-fields">
+            <div class="up-head">
+              <button type="button" class="btn icon-btn" data-up-go="-1" aria-label="Предыдущее">←</button>
+              <b id="upNum"></b>
+              <button type="button" class="btn icon-btn" data-up-go="1" aria-label="Следующее">→</button>
+            </div>
+            <div class="up-label">Кто на этом ${"<span id='upWhat'>фото</span>"}?</div>
+            <div class="chips" id="tagChips">${state.profiles.map(p =>
+              `<button type="button" class="chip" data-tag="${p.id}" aria-pressed="false">${avatar(p.id)}${esc(p.name)}</button>`).join("")}</div>
+            <div class="up-quick">
+              <button type="button" class="link-btn" data-up-copy>↺ Как на прошлом</button>
+              <button type="button" class="link-btn" data-up-alltags>👥 Эти отметки — всем</button>
+            </div>
+            <label>Подпись<textarea id="caption" maxlength="500" placeholder="Что тут происходит?"></textarea></label>
+            <label>Когда это было<input type="date" id="takenAt"></label>
+            <div class="up-quick"><button type="button" class="link-btn" data-up-alldate>📅 Эту дату — всем</button></div>
+          </div>
+        </div>
+      </div>
       <div class="progress" id="upProg" hidden><i></i></div>
       <div class="row"><button type="submit" class="btn primary" id="upBtn" disabled>Загрузить</button><p class="msg" id="upMsg"></p></div>
     </form>`);
 
-  let files = [];
-  const pick = (list, keepDate = false) => {
+  // Что выбрано: у каждого файла свои отметки, подпись и дата
+  let items = [], cur = 0, busy = false;
+  const $ = id => document.getElementById(id);
+  const chips = () => [...document.querySelectorAll("#tagChips [data-tag]")];
+  const kindOf = f => f.type.startsWith("video/") ? "video" : "photo";
+
+  const add = list => {
+    const have = new Set(items.map(it => it.key));
     // HEIC с айфона Windows иногда отдаёт без типа, поэтому смотрим и на расширение
-    files = [...list].filter(f => f.type.startsWith("image/") || f.type.startsWith("video/") || isHeic(f));
-    document.getElementById("picked").innerHTML = files.map(f =>
-      f.type.startsWith("video/") ? `<div>▶ видео</div>` :
-      isHeic(f) ? `<div>HEIC</div>` :
-      `<div style="background-image:url(${URL.createObjectURL(f)})"></div>`).join("");
-    document.getElementById("upBtn").disabled = !files.length;
-    // Дата по умолчанию: когда снят первый файл. Берём местную дату, а не по Гринвичу:
-    // иначе утреннее фото в Ангарске (UTC+8) попадало бы во вчерашний день
-    if (files[0] && !keepDate) {
-      const d = new Date(files[0].lastModified), p2 = n => String(n).padStart(2, "0");
-      document.getElementById("takenAt").value = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
-    }
+    const fresh = [...list].filter(f => f.type.startsWith("image/") || f.type.startsWith("video/") || isHeic(f))
+      .map(f => ({ file: f, key: `${f.name}|${f.size}|${f.lastModified}`, kind: kindOf(f), tags: [], caption: "",
+        // Дата — по местному времени, а не по Гринвичу: иначе утреннее фото в Ангарске попадало во вчерашний день
+        takenAt: localDay(f.lastModified || Date.now()),
+        preview: isHeic(f) && !isApple ? null : URL.createObjectURL(f) }))
+      .filter(it => !have.has(it.key));
+    if (!fresh.length) return;
+    const first = items.length;
+    items.push(...fresh);
+    show(first);
   };
-  const drop = document.getElementById("drop"), input = document.getElementById("files");
+
+  const thumbHtml = (it, i) => `<button type="button" class="up-thumb${i === cur ? " on" : ""}" data-up-pick="${i}" aria-label="Фото ${i + 1}">
+      ${it.preview ? (it.kind === "video" ? `<video src="${it.preview}#t=0.3" muted playsinline preload="metadata"></video>` : `<img src="${it.preview}" alt="">`) : `<span>HEIC</span>`}
+      ${it.kind === "video" ? `<i class="up-vid">▶</i>` : ""}
+      ${it.tags.length ? `<i class="up-badge">👥 ${it.tags.length}</i>` : ""}
+      <span class="up-x" data-up-del="${i}" role="button" aria-label="Убрать">✕</span>
+    </button>`;
+
+  const paintStrip = () => {
+    $("upStrip").innerHTML = items.map(thumbHtml).join("") + `<button type="button" class="up-thumb up-more" data-up-more aria-label="Добавить ещё">+</button>`;
+    $("upStrip").querySelector(".up-thumb.on")?.scrollIntoView({ block: "nearest", inline: "center" });
+  };
+
+  // Открыть файл номер i: превью и его отметки, подпись, дата
+  function show(i) {
+    $("upEditor").hidden = !items.length;
+    $("drop").hidden = !!items.length;
+    $("upBtn").disabled = !items.length || busy;
+    $("upBtn").textContent = items.length > 1 ? `Загрузить все (${items.length})` : "Загрузить";
+    if (!items.length) { $("upStrip").innerHTML = ""; $("upPrev").innerHTML = ""; cur = 0; return; }   // убрали все — начинаем с чистого листа
+    cur = Math.max(0, Math.min(items.length - 1, i));
+    const it = items[cur];
+    $("upPrev").innerHTML = it.preview
+      ? (it.kind === "video" ? `<video src="${it.preview}" controls muted playsinline preload="metadata"></video>` : `<img src="${it.preview}" alt="">`)
+      : `<span class="up-nopic">HEIC — превью нет, но загрузится нормально</span>`;
+    $("upNum").textContent = `${cur + 1} из ${items.length}`;
+    $("upWhat").textContent = it.kind === "video" ? "видео" : "фото";
+    chips().forEach(b => b.setAttribute("aria-pressed", it.tags.includes(b.dataset.tag)));
+    $("caption").value = it.caption; autoGrow($("caption"));
+    $("takenAt").value = it.takenAt || "";
+    document.querySelector('[data-up-go="-1"]').disabled = cur === 0;
+    document.querySelector('[data-up-go="1"]').disabled = cur === items.length - 1;
+    document.querySelector("[data-up-copy]").disabled = cur === 0;
+    paintStrip();
+  }
+
+  const drop = $("drop"), input = $("files");
   drop.onclick = () => input.click();
   drop.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } };
-  input.onchange = () => pick(input.files);
-  drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
-  drop.ondragleave = () => drop.classList.remove("over");
-  drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); pick(e.dataTransfer.files); };
+  input.onchange = () => { add(input.files); input.value = ""; };   // value = "": тот же файл можно выбрать снова
+  for (const el of [drop, $("upEditor")]) {
+    el.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+    el.ondragleave = () => drop.classList.remove("over");
+    el.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); add(e.dataTransfer.files); };
+  }
 
-  document.getElementById("tagChips").onclick = e => {
-    const b = e.target.closest("[data-tag]"); if (!b) return;
-    b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") !== "true");
+  // Свайп по превью влево-вправо — следующее и предыдущее фото
+  let sx = 0, sy = 0;
+  $("upPrev").addEventListener("touchstart", e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
+  $("upPrev").addEventListener("touchend", e => {
+    const dx = e.changedTouches[0].clientX - sx, dy = e.changedTouches[0].clientY - sy;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5) show(cur + (dx < 0 ? 1 : -1));
+  }, { passive: true });
+
+  $("tagChips").onclick = e => {
+    const b = e.target.closest("[data-tag]"); if (!b || !items[cur]) return;
+    const on = b.getAttribute("aria-pressed") !== "true";
+    b.setAttribute("aria-pressed", on);
+    const it = items[cur];
+    it.tags = on ? [...it.tags, b.dataset.tag] : it.tags.filter(x => x !== b.dataset.tag);
+    paintStrip();
+  };
+  $("caption").oninput = () => { if (items[cur]) items[cur].caption = $("caption").value; };
+  $("takenAt").onchange = () => { if (items[cur]) items[cur].takenAt = $("takenAt").value; };
+
+  $("upEditor").onclick = e => {
+    const del = e.target.closest("[data-up-del]");
+    if (del) {
+      e.stopPropagation();
+      const i = Number(del.dataset.upDel);
+      if (items[i]?.preview) URL.revokeObjectURL(items[i].preview);
+      items.splice(i, 1);
+      return show(i <= cur ? cur - 1 : cur);
+    }
+    if (e.target.closest("[data-up-more]")) return input.click();
+    const pick = e.target.closest("[data-up-pick]"); if (pick) return show(Number(pick.dataset.upPick));
+    const go = e.target.closest("[data-up-go]"); if (go) return show(cur + Number(go.dataset.upGo));
+    const say = t => { const m = $("upMsg"); m.className = "msg ok"; m.textContent = t; setTimeout(() => { if (m.textContent === t) m.textContent = ""; }, 2500); };
+    if (e.target.closest("[data-up-copy]") && cur > 0) { items[cur].tags = [...items[cur - 1].tags]; show(cur); return say("Отметки как на прошлом"); }
+    if (e.target.closest("[data-up-alltags]")) { const t = items[cur].tags; items.forEach(it => it.tags = [...t]); show(cur); return say(t.length ? `Отметки поставлены на все ${items.length}` : "Отметки убраны со всех"); }
+    if (e.target.closest("[data-up-alldate]")) { const d = items[cur].takenAt; items.forEach(it => it.takenAt = d); return say(`Дата поставлена на все ${items.length}`); }
   };
 
-  document.getElementById("upForm").onsubmit = async e => {
+  $("upForm").onsubmit = async e => {
     e.preventDefault();
-    const btn = document.getElementById("upBtn"), msg = document.getElementById("upMsg");
-    const tags = [...document.querySelectorAll('[data-tag][aria-pressed="true"]')].map(b => b.dataset.tag);
-    const caption = document.getElementById("caption").value.trim();
-    const takenAt = document.getElementById("takenAt").value || null;
+    if (busy || !items.length) return;
+    busy = true;
+    const btn = $("upBtn"), msg = $("upMsg");
     btn.disabled = true; msg.className = "msg";
-    const failed = [];
-    const prog = document.getElementById("upProg"), bar = prog.querySelector("i");
+    $("upForm").classList.add("uploading");
+    const prog = $("upProg"), bar = prog.querySelector("i");
     prog.hidden = false;
-    for (let i = 0; i < files.length; i++) {
-      msg.textContent = `Загружаю ${i + 1} из ${files.length}...`;
-      bar.style.width = `${Math.max(6, (i + 0.5) / files.length * 100)}%`;
-      try { await uploadOne(files[i], { tags, caption, takenAt }); }
-      catch (err) { failed.push({ file: files[i], text: `${files[i].name}: ${err.message || err}` }); }
-      bar.style.width = `${(i + 1) / files.length * 100}%`;
+    const failed = [], total = items.length;
+    for (let i = 0; i < total; i++) {
+      const it = items[i];
+      msg.textContent = `Загружаю ${i + 1} из ${total}...`;
+      bar.style.width = `${Math.max(6, (i + 0.5) / total * 100)}%`;
+      try { await uploadOne(it.file, { tags: it.tags, caption: it.caption.trim(), takenAt: it.takenAt || null }); if (it.preview) URL.revokeObjectURL(it.preview); }
+      catch (err) { failed.push({ it, text: `${it.file.name}: ${err.message || err}` }); }
+      bar.style.width = `${(i + 1) / total * 100}%`;
     }
+    // Одно уведомление всем на всю пачку: «Костя загрузил 12 фото и 2 видео» (а не 14 штук подряд)
+    if (failed.length < total) sb.rpc("announce_media").then(() => {}, () => {});
     await loadAll();
+    busy = false;
+    $("upForm").classList.remove("uploading");
     if (failed.length) {
+      // Остаются только те, что не загрузились, — со своими отметками. Повторное нажатие не задублирует загруженное
+      items = failed.map(f => f.it);
+      show(0);
       msg.className = "msg err";
-      msg.textContent = `Не загрузилось ${failed.length}: ${failed.map(f => f.text).join("; ")}`;
-      // В списке оставляем только то, что не загрузилось: повторное нажатие не задублирует уже загруженное
-      pick(failed.map(f => f.file), true);
-      btn.disabled = false;
+      msg.textContent = `Не загрузилось ${failed.length} из ${total}: ${failed.map(f => f.text).join("; ")}`;
     } else {
       location.hash = "#/";
     }
@@ -1245,7 +1361,7 @@ async function openViewer(id, dir = 0, fromEl = null) {
     ${idx > 0 ? `<button class="btn nav-btn prev" data-go="${list[idx - 1].id}" data-dir="-1" aria-label="Предыдущее">←</button>` : ""}
     ${idx < list.length - 1 ? `<button class="btn nav-btn next" data-go="${list[idx + 1].id}" data-dir="1" aria-label="Следующее">→</button>` : ""}
     <div class="media${dir ? (dir > 0 ? " from-right" : " from-left") : ""}">${m.kind === "video"
-      ? `<video src="${url(m.path)}" controls autoplay playsinline></video>`
+      ? `<video src="${url(m.path)}" poster="${url(thumbPath(m))}" controls autoplay playsinline></video>`
       : `<img src="${url(m.path)}" alt="${esc(m.caption)}">`}</div>
     <aside class="info">
       ${m.caption ? `<p class="caption">${esc(m.caption)}</p>` : ""}
@@ -1292,7 +1408,7 @@ function pvSlide(x, cur = false) {
   return `<div class="pv-slide${cur ? " media" : ""}" data-pv-id="${x.id}" style="background-image:url('${url(thumbPath(x))}')">${
     x.kind === "video" && cur
       ? `<video src="${url(x.path)}" poster="${url(thumbPath(x))}" controls autoplay playsinline></video>`
-      : x.kind === "video" ? `<span class="pv-play">▶</span>`
+      : x.kind === "video" ? (url(thumbPath(x)) ? `<img src="${url(thumbPath(x))}" alt="" draggable="false">` : "") + `<span class="pv-play">▶</span>`
       : `<img class="fade" src="${url(midPath(x)) || url(x.path)}" alt="${esc(x.caption || "")}" draggable="false">`}</div>`;
 }
 function pvTop(m, list, idx) {
@@ -1840,25 +1956,64 @@ async function cropSquare(file, size) {
   return new Promise(res => c.toBlob(res, "image/jpeg", 0.88));
 }
 
-// Кадр из видео для превью. Если не получилось, будет значок ▶
-function videoThumb(file) {
+// Кадр из видео для превью (на 1-й секунде или в середине короткого видео).
+// iPhone не грузит видео, которого нет на странице, — поэтому вставляем его невидимым и «включаем» без звука.
+// source — файл (при загрузке) или ссылка (для старых видео без превью). Не получилось — null, будет ▶
+function videoThumb(source) {
   return new Promise(resolve => {
     const v = document.createElement("video");
-    const src = URL.createObjectURL(file);
-    const done = blob => { URL.revokeObjectURL(src); resolve(blob); };
-    const timer = setTimeout(() => done(null), 8000);
-    v.muted = true; v.playsInline = true; v.preload = "auto"; v.src = src;
-    v.onloadeddata = () => { v.currentTime = Math.min(1, (v.duration || 2) / 2); };
-    v.onseeked = () => {
-      const k = Math.min(1, 640 / Math.max(v.videoWidth, v.videoHeight));
-      const c = document.createElement("canvas");
-      c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k);
-      c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
-      clearTimeout(timer);
-      c.toBlob(done, "image/jpeg", 0.8);
+    const isFile = source instanceof Blob;
+    const src = isFile ? URL.createObjectURL(source) : source;
+    let finished = false;
+    const done = blob => {
+      if (finished) return; finished = true;
+      clearTimeout(timer); v.pause(); v.removeAttribute("src"); v.load(); v.remove();
+      if (isFile) URL.revokeObjectURL(src);
+      resolve(blob);
     };
-    v.onerror = () => { clearTimeout(timer); done(null); };
+    const timer = setTimeout(() => done(null), 15000);
+    v.muted = true; v.defaultMuted = true; v.playsInline = true; v.setAttribute("playsinline", ""); v.preload = "auto";
+    if (!isFile) v.crossOrigin = "anonymous";   // чужой адрес: без этого кадр нельзя сохранить в картинку
+    v.style.cssText = "position:fixed;left:-9999px;top:0;width:2px;height:2px;opacity:0;pointer-events:none";
+    document.body.appendChild(v);
+    const grab = () => {
+      if (finished || !v.videoWidth) return;
+      try {
+        const k = Math.min(1, 640 / Math.max(v.videoWidth, v.videoHeight));
+        const c = document.createElement("canvas");
+        c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k);
+        c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+        c.toBlob(b => done(b), "image/jpeg", 0.8);
+      } catch (e) { done(null); }
+    };
+    v.onloadedmetadata = () => {
+      const at = Math.min(1, (isFinite(v.duration) && v.duration ? v.duration : 2) / 3);
+      // Safari рисует кадр только после того, как видео хоть раз «поиграло» — коротко включаем и сразу ставим на паузу
+      const p = v.play(); if (p) p.then(() => v.pause()).catch(() => {});
+      try { v.currentTime = at; } catch (e) {}
+    };
+    v.onseeked = () => setTimeout(grab, 120);
+    v.onerror = () => done(null);
+    v.src = src;
+    v.load();
   });
+}
+
+// Старые видео без превью (снятые на iPhone до починки): их хозяин, когда заходит на сайт,
+// тихо делает превью в фоне — по одному, чтобы не грузить телефон
+let thumbBackfillDone = false;
+async function backfillVideoThumbs() {
+  if (thumbBackfillDone || !me()) return;
+  thumbBackfillDone = true;
+  const mine = state.media.filter(m => m.kind === "video" && m.owner === me());
+  if (!mine.length) return;
+  await signed(mine.flatMap(m => [m.path, thumbPath(m)]));
+  for (const m of mine.filter(m => !url(thumbPath(m))).slice(0, 10)) {
+    const blob = await videoThumb(url(m.path));
+    if (!blob) continue;
+    const { error } = await sb.storage.from(BUCKET).upload(thumbPath(m), blob, { contentType: "image/jpeg" });
+    if (!error) delete state.urls[thumbPath(m)];   // при следующей отрисовке ссылка возьмётся заново
+  }
 }
 
 // ---------- Переключение страниц ----------
@@ -2212,15 +2367,26 @@ function wireParallax() {
 // Кто-то добавил фото или цитату: показываем плашку, чтобы не дёргать страницу под рукой.
 // О каждой новинке говорим один раз: в запасном режиме проверка каждые 15 секунд видит её снова
 const announced = new Set();
+// Фото из одной пачки приходят по одному — копим их 4 секунды и показываем один баннер на всю пачку
+const mediaBatch = new Map();   // кто загрузил → { photos, videos, timer }
+function mediaText(photos, videos) {
+  if (photos + videos === 1) return videos ? "загрузил новое видео 🎬" : "загрузил новое фото 📸";
+  return "загрузил " + [photos && `${photos} фото`, videos && `${videos} видео`].filter(Boolean).join(" и ");
+}
 function onNewStuff(kind, row) {
   const who = kind === "media" ? row.owner : row.added_by;
   if (who === me() || announced.has(row.id)) return;
   announced.add(row.id);
-  notifyBanner({
-    who, title: nameOf(who),
-    text: kind === "media" ? "загрузил новое фото — нажми, чтобы посмотреть" : "добавил цитату — нажми, чтобы посмотреть",
-    onOpen: async () => { await loadAll(); location.hash = kind === "media" ? "#/" : "#/quotes"; route(); }
-  });
+  const open = async () => { await loadAll(); location.hash = kind === "media" ? "#/" : "#/quotes"; route(); };
+  if (kind !== "media") return notifyBanner({ who, title: nameOf(who), text: "добавил цитату — нажми, чтобы посмотреть", onOpen: open });
+  const b = mediaBatch.get(who) || { photos: 0, videos: 0, timer: null };
+  row.kind === "video" ? b.videos++ : b.photos++;
+  clearTimeout(b.timer);
+  b.timer = setTimeout(() => {
+    mediaBatch.delete(who);
+    notifyBanner({ who, title: nameOf(who), text: `${mediaText(b.photos, b.videos)} — нажми, чтобы посмотреть`, onOpen: open });
+  }, 4000);
+  mediaBatch.set(who, b);
 }
 
 // ---------- Потянул страницу вниз — обновление (на телефоне) ----------
