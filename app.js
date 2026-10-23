@@ -894,12 +894,29 @@ async function viewTop() {
     </div>
     <div class="aw-dots" id="awDots">${NOMS.map((_, i) => `<i class="${i === 0 ? "on" : ""}"></i>`).join("")}</div>`;
 
+  // Шапка: слева название и переключатель месяца, справа цифры месяца — чтобы не было пустоты
+  const k = y * 12 + m;
+  const reacts = state.mr.filter(r => monthKey(r.created_at) === k).length + state.qr.filter(r => monthKey(r.created_at) === k).length;
+  const active = Object.values(stats).filter(v => v.score > 0).length;
+  const daysLeft = new Date(y, m + 1, 0).getDate() - now.getDate();
+  const when = !isNow ? "Итоги подведены" : daysLeft ? `До итогов ${daysLeft} ${plural(daysLeft, ["день", "дня", "дней"])}` : "Итоги — сегодня в полночь";
+  const stat = (n, label, c) => `<div class="th-stat" style="--sc:${c}"><b data-count="${n}">${n}</b><span>${label}</span></div>`;
+
   shell("top", `
-    <div class="head" style="justify-content:space-between">
-      <div><h1>Топ месяца</h1><p class="sub">${MONTHS[m]} ${y}</p></div>
-      <div class="row">
-        <button type="button" class="btn" data-tm="-1" aria-label="Прошлый месяц">←</button>
-        <button type="button" class="btn" data-tm="1" aria-label="Следующий месяц" ${isNow ? "disabled" : ""}>→</button>
+    <div class="top-hero">
+      <div class="th-main">
+        <h1>Топ месяца</h1>
+        <div class="th-month">
+          <button type="button" data-tm="-1" aria-label="Прошлый месяц">‹</button>
+          <b>${MONTHS[m]} ${y}</b>
+          <button type="button" data-tm="1" aria-label="Следующий месяц" ${isNow ? "disabled" : ""}>›</button>
+        </div>
+        <p class="th-when">${isNow ? `<i class="th-live"></i>` : "🏁 "}${when}</p>
+      </div>
+      <div class="th-stats">
+        ${stat(monthMedia.length, "фото и видео", "#ff4fd8")}
+        ${stat(reacts, plural(reacts, ["реакция", "реакции", "реакций"]), "#3ee6ff")}
+        ${stat(active, "корефанов в деле", "#ffd34f")}
       </div>
     </div>
     ${state.reactsReady ? "" : `<div class="empty">Реакции ещё не включены. Нужно выполнить файл 03_reactions.sql в Supabase.</div>`}
@@ -944,7 +961,9 @@ function wireAwards() {
   cards.forEach((c, i) => {
     const flip = e => {
       if (e.target.closest("a")) return;
-      if (i !== cur) return go(i);   // нажал на соседнюю — сначала подъезжает к центру
+      // На компьютере карточки стоят в ряд (grid) — переворачивается любая. На телефоне соседняя сначала подъезжает к центру
+      const row = getComputedStyle(track).display === "grid";
+      if (!row && i !== cur) return go(i);
       c.classList.toggle("flipped");
       navigator.vibrate?.(8);
     };
