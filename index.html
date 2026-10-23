@@ -23,11 +23,11 @@
 <link rel="preconnect" href="https://jvyitolecgbldlxypwcz.supabase.co" crossorigin>
 <link rel="preconnect" href="https://korefany.netlify.app" crossorigin>
 <!-- ?v=... меняем при каждом обновлении, чтобы телефоны не показывали старые файлы из памяти -->
-<link rel="stylesheet" href="style.css?v=105">
+<link rel="stylesheet" href="style.css?v=106">
 </head>
 <body>
   <!-- Пока сайт запускается, видны мерцающие заготовки ленты -->
-  <div id="app"><div class="loading skeleton" aria-label="Загружаю">
+  <div id="app"><div class="loading skeleton" id="boot" aria-label="Загружаю">
     <div class="sk-top"></div>
     <div class="sk-body">
       <div class="sk sk-cover"></div>
@@ -37,6 +37,41 @@
       </div>
     </div>
   </div></div>
+
+  <!-- Заставка при запуске: неоновая «К» мигает и загорается, буквы «КОРЕФАНЫ» зажигаются по одной.
+       Уходит, как только сайт нарисовал первую страницу (но не раньше чем через 0,9 с, чтобы «К» успела загореться) -->
+  <div class="splash" id="splash" aria-hidden="true">
+    <div class="sp-sign">
+      <svg viewBox="0 0 48 48">
+        <circle class="sp-ring2" cx="24" cy="24" r="20.5"/><circle class="sp-ring1" cx="24" cy="24" r="20.5"/>
+        <circle class="sp-tube" cx="24" cy="24" r="20.5" style="stroke-width:1.2"/><circle class="sp-ring" cx="24" cy="24" r="20.5"/>
+        <g transform="translate(12 12)">
+          <path class="sp-tube" d="M8 6v12M8 12.2 15.8 6M10.9 10 16.2 18"/>
+          <path class="sp-glow2" d="M8 6v12M8 12.2 15.8 6M10.9 10 16.2 18"/>
+          <path class="sp-glow1" d="M8 6v12M8 12.2 15.8 6M10.9 10 16.2 18"/>
+          <path class="sp-core" d="M8 6v12M8 12.2 15.8 6M10.9 10 16.2 18"/>
+        </g>
+      </svg>
+      <div class="sp-reflect"></div>
+    </div>
+    <p class="sp-word"><span style="--n:0">К</span><span style="--n:1">О</span><span style="--n:2">Р</span><span style="--n:3">Е</span><span style="--n:4">Ф</span><span style="--n:5">А</span><span style="--n:6">Н</span><span style="--n:7">Ы</span><i>.</i></p>
+    <div class="sp-bar"><b></b></div>
+  </div>
+  <script>
+    (function () {
+      var sp = document.getElementById("splash"), app = document.getElementById("app"), t0 = Date.now(), gone = false;
+      function hide() {
+        if (gone) return; gone = true;
+        // Сайт открылся из памяти мгновенно — даём «К» загореться (0,9 с), дольше не держим
+        setTimeout(function () { sp.classList.add("out"); setTimeout(function () { sp.remove(); }, 450); }, Math.max(0, 900 - (Date.now() - t0)));
+      }
+      // Первая страница нарисована (заготовка #boot пропала) или показано сообщение об ошибке — заставка уходит
+      new MutationObserver(function (_, obs) {
+        if (!document.getElementById("boot") || app.querySelector(".loading b")) { obs.disconnect(); hide(); }
+      }).observe(app, { childList: true, subtree: true });
+      setTimeout(hide, 25000);   // на всякий случай: заставка не может висеть вечно
+    })();
+  </script>
 
   <script>
     // Если через 20 секунд всё ещё висит «Загружаю...», объясняем, что делать
@@ -51,10 +86,10 @@
 
   <!-- Библиотека Supabase 2.45.4 лежит прямо на сайте, чтобы не зависеть от чужих серверов -->
   <script src="vendor/supabase.js"></script>
-  <script src="config.js?v=105"></script>
-  <script src="app.js?v=105"></script>
-  <script src="chat.js?v=105"></script>
-  <script src="money.js?v=105"></script>
-  <script src="push.js?v=105"></script>
+  <script src="config.js?v=106"></script>
+  <script src="app.js?v=106"></script>
+  <script src="chat.js?v=106"></script>
+  <script src="money.js?v=106"></script>
+  <script src="push.js?v=106"></script>
 </body>
 </html>

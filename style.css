@@ -66,6 +66,46 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, a:focus-visib
 
 /* Заготовки, пока грузится: мерцают, как тусклый неон */
 .skeleton { padding: 0; text-align: left; }
+
+/* ---------- Заставка при запуске (index.html, #splash) ----------
+   «К» нарисована SVG-линиями, свечение — те же линии шире и прозрачнее, без фильтров (iPhone их режет) */
+.splash { position: fixed; inset: 0; z-index: 200; display: grid; place-content: center; justify-items: center; gap: 26px; background: var(--bg); transition: opacity .4s ease, transform .4s ease; }
+.splash.out { opacity: 0; transform: scale(1.06); pointer-events: none; }
+.sp-sign { position: relative; width: min(42vw, 170px); aspect-ratio: 1; }
+.sp-sign svg { width: 100%; height: 100%; overflow: visible; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.sp-tube { stroke: #3a1f3a; stroke-width: 2.4; }
+.sp-ring { stroke: var(--accent); stroke-width: 1.2; }
+.sp-ring1 { stroke: var(--accent); stroke-width: 3; --to: .5; }
+.sp-ring2 { stroke: var(--accent); stroke-width: 7; --to: .18; }
+.sp-glow2 { stroke: var(--accent); stroke-width: 7.5; --to: .18; }
+.sp-glow1 { stroke: var(--accent); stroke-width: 4.2; --to: .5; }
+.sp-core { stroke: #ffd6f6; stroke-width: 2.2; }
+/* Мигает, как включающаяся вывеска: вспышка, пауза, ещё вспышка — и горит */
+.sp-ring, .sp-ring1, .sp-ring2, .sp-glow1, .sp-glow2, .sp-core, .sp-reflect { opacity: 0; animation: sp-on 1.1s linear .2s forwards; }
+@keyframes sp-on {
+  0% { opacity: 0; } 8% { opacity: var(--to, 1); } 12% { opacity: 0; } 30% { opacity: 0; }
+  33% { opacity: var(--to, 1); } 37% { opacity: .1; } 42% { opacity: var(--to, 1); } 100% { opacity: var(--to, 1); }
+}
+.sp-reflect { position: absolute; left: 10%; right: 10%; top: 100%; height: 40%; background: radial-gradient(50% 40% at 50% 0%, rgba(255, 79, 216, .35), transparent 70%); }
+.sp-word { margin: 0; display: flex; font-family: var(--font-logo); font-size: 22px; letter-spacing: .06em; color: #3a2b45; }
+.sp-word span { animation: sp-letter .3s ease forwards; animation-delay: calc(.8s + var(--n) * 60ms); }
+.sp-word i { font-style: normal; color: #24414a; animation: sp-dot .3s ease forwards 1.35s; }
+@keyframes sp-letter { to { color: #ffe6fb; text-shadow: 0 0 6px var(--accent), 0 0 16px rgba(255, 79, 216, .6); } }
+@keyframes sp-dot { to { color: var(--accent-2); text-shadow: 0 0 8px var(--accent-2); } }
+.sp-bar { width: 120px; height: 3px; border-radius: 2px; background: rgba(255, 255, 255, .07); overflow: hidden; }
+.sp-bar b { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent), var(--accent-2)); box-shadow: 0 0 8px var(--accent); animation: sp-load 2.4s cubic-bezier(.3, 0, .2, 1) forwards .2s; }
+@keyframes sp-load { 70% { width: 80%; } to { width: 100%; } }
+
+/* ---------- Свечение за курсором (только компьютер с мышкой) ---------- */
+.cursor-glow { position: fixed; left: 0; top: 0; z-index: -1; width: 520px; height: 520px; margin: -260px 0 0 -260px; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(closest-side, rgba(255, 79, 216, .2), rgba(140, 90, 255, .08) 55%, transparent); opacity: 0; transition: opacity .5s; will-change: transform; }
+.cursor-glow.on { opacity: 1; }
+/* Без анимаций (настройка «Уменьшение движения») — вывеска сразу горит */
+@media (prefers-reduced-motion: reduce) {
+  .sp-ring, .sp-ring1, .sp-ring2, .sp-glow1, .sp-glow2, .sp-core, .sp-reflect { opacity: var(--to, 1) !important; }
+  .sp-word span { color: #ffe6fb; } .sp-word i { color: var(--accent-2); }
+  .cursor-glow { display: none; }
+}
 .sk-top { height: 52px; margin: 10px 16px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); }
 .sk-body { max-width: 1100px; margin: 0 auto; padding: 28px 16px; display: grid; gap: 28px; }
 .sk {

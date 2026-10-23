@@ -2402,6 +2402,28 @@ function countUp(root = document) {
   });
 }
 
+// Свечение за курсором: на компьютере за мышкой по фону мягко плывёт розовое пятно света.
+// Только где есть мышка (на телефоне нет), двигает видеокарта, догоняет курсор плавно
+(function cursorGlow() {
+  if (!matchMedia("(hover: hover) and (pointer: fine)").matches || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const g = document.createElement("div");
+  g.className = "cursor-glow"; g.setAttribute("aria-hidden", "true");
+  document.body.prepend(g);
+  let x = innerWidth / 2, y = innerHeight / 2, gx = x, gy = y, raf = 0;
+  const step = () => {
+    gx += (x - gx) * 0.12; gy += (y - gy) * 0.12;   // догоняет с небольшой задержкой — так свечение «плывёт»
+    g.style.transform = `translate3d(${gx.toFixed(1)}px, ${gy.toFixed(1)}px, 0)`;
+    raf = Math.abs(x - gx) + Math.abs(y - gy) > 0.5 ? requestAnimationFrame(step) : 0;
+  };
+  addEventListener("pointermove", e => {
+    if (e.pointerType !== "mouse") return;
+    x = e.clientX; y = e.clientY;
+    g.classList.add("on");
+    if (!raf) raf = requestAnimationFrame(step);
+  }, { passive: true });
+  document.documentElement.addEventListener("mouseleave", () => g.classList.remove("on"));
+})();
+
 // Параллакс обложки ленты: при прокрутке фото уезжает медленнее страницы и темнеет, надпись тает
 let parallaxOn = false;
 function wireParallax() {
