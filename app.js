@@ -1012,26 +1012,79 @@ function viewUpload() {
     const fresh = [...list].filter(f => f.type.startsWith("image/") || f.type.startsWith("video/") || isHeic(f))
       .map(f => ({ file: f, key: `${f.name}|${f.size}|${f.lastModified}`, kind: kindOf(f), tags: [], caption: "",
         // Дата — по местному времени, а не по Гринвичу: иначе утреннее фото в Ангарске попадало во вчерашний день
-        takenAt: localDay(f.lastModified || Date.now()),
-        preview: isHeic(f) && !isApple ? null : URL.createObjectURL(f) }))
+        takenAt: localDay(f.lastModified || Date.now()) }))
       .filter(it => !have.has(it.key));
     if (!fresh.length) return;
     const first = items.length;
     items.push(...fresh);
+    paintStrip();
     show(first);
+    pumpThumbs();
   };
 
-  const thumbHtml = (it, i) => `<button type="button" class="up-thumb${i === cur ? " on" : ""}" data-up-pick="${i}" aria-label="Фото ${i + 1}">
-      ${it.preview ? (it.kind === "video" ? `<video src="${it.preview}#t=0.3" muted playsinline preload="metadata"></video>` : `<img src="${it.preview}" alt="">`) : `<span>HEIC</span>`}
+  // ВАЖНО для iPhone: на экране только уменьшенные копии. Раньше в ленте стояли оригиналы по 12 Мп,
+  // и при 10 фото телефон раскрывал сотни мегабайт картинок на каждое нажатие — страница замирала,
+  // кнопка «Загрузить» не нажималась. Теперь миниатюры 200px и превью 1200px делаются по одной, в фоне
+  const makePic = async (it, max) => {
+    if (it.kind === "video") { const b = await videoThumb(it.file); return b ? URL.createObjectURL(b) : null; }
+    const img = await decodeImage(it.file);
+    try { const b = await scaleTo(img, max, 0.8); return b ? URL.createObjectURL(b) : null; }
+    finally { img.close?.(); }
+  };
+  const forget = it => [it.thumb, it.view, it.vurl].forEach(u => u && URL.revokeObjectURL(u));
+  let pumping = false;
+  async function pumpThumbs() {
+    if (pumping) return;
+    pumping = true;
+    try {
+      for (let it; !busy && (it = items.find(x => !x.thumbTried));) {   // во время загрузки не мешаем ей
+        it.thumbTried = true;
+        it.thumb = await makePic(it, 200).catch(() => null);
+        if (!items.includes(it)) { forget(it); continue; }   // пока делали, его уже убрали
+        const el = $("upStrip")?.querySelector(`[data-key="${CSS.escape(it.key)}"] .up-pic`);
+        if (el) el.outerHTML = thumbPic(it);
+      }
+    } finally { pumping = false; }
+  }
+  const thumbPic = it => it.thumb ? `<img class="up-pic" src="${it.thumb}" alt="">`
+    : `<span class="up-pic${it.thumbTried ? "" : " wait"}">${it.thumbTried ? (it.kind === "video" ? "🎬" : "🖼") : ""}</span>`;
+  const thumbHtml = (it, i) => `<button type="button" class="up-thumb${i === cur ? " on" : ""}" data-up-pick="${i}" data-key="${esc(it.key)}" aria-label="${it.kind === "video" ? "Видео" : "Фото"} ${i + 1}">
+      ${thumbPic(it)}
       ${it.kind === "video" ? `<i class="up-vid">▶</i>` : ""}
-      ${it.tags.length ? `<i class="up-badge">👥 ${it.tags.length}</i>` : ""}
+      <i class="up-badge"${it.tags.length ? "" : " hidden"}>👥 ${it.tags.length}</i>
       <span class="up-x" data-up-del="${i}" role="button" aria-label="Убрать">✕</span>
     </button>`;
 
+  // Ленту целиком рисуем только когда добавили или убрали файлы. Выбор и отметки — точечно, без перерисовки картинок
   const paintStrip = () => {
     $("upStrip").innerHTML = items.map(thumbHtml).join("") + `<button type="button" class="up-thumb up-more" data-up-more aria-label="Добавить ещё">+</button>`;
+  };
+  const markStrip = () => {
+    $("upStrip").querySelectorAll("[data-up-pick]").forEach((b, i) => {
+      b.classList.toggle("on", i === cur);
+      const badge = b.querySelector(".up-badge"), n = items[i]?.tags.length || 0;
+      badge.hidden = !n; badge.textContent = `👥 ${n}`;
+    });
     $("upStrip").querySelector(".up-thumb.on")?.scrollIntoView({ block: "nearest", inline: "center" });
   };
+
+  // Большое превью текущего: фото — уменьшенная копия 1200px, видео — само видео (только одно на экране)
+  function paintPreview(it) {
+    const box = $("upPrev");
+    if (it.kind === "video") {
+      it.vurl = it.vurl || URL.createObjectURL(it.file);
+      box.innerHTML = `<video src="${it.vurl}" controls muted playsinline preload="metadata"></video>`;
+      return;
+    }
+    if (it.view) { box.innerHTML = `<img src="${it.view}" alt="">`; return; }
+    box.innerHTML = `<span class="up-nopic">Открываю фото...</span>`;
+    it.viewing = it.viewing || makePic(it, 1200).catch(() => null);
+    it.viewing.then(u => {
+      it.view = u;
+      if (items[cur] !== it) return;   // пока открывали, уже перелистнули
+      box.innerHTML = u ? `<img src="${u}" alt="">` : `<span class="up-nopic">Превью не открылось, но фото загрузится нормально</span>`;
+    });
+  }
 
   // Открыть файл номер i: превью и его отметки, подпись, дата
   function show(i) {
@@ -1040,11 +1093,10 @@ function viewUpload() {
     $("upBtn").disabled = !items.length || busy;
     $("upBtn").textContent = items.length > 1 ? `Загрузить все (${items.length})` : "Загрузить";
     if (!items.length) { $("upStrip").innerHTML = ""; $("upPrev").innerHTML = ""; cur = 0; return; }   // убрали все — начинаем с чистого листа
+    const prev = items[cur];
     cur = Math.max(0, Math.min(items.length - 1, i));
     const it = items[cur];
-    $("upPrev").innerHTML = it.preview
-      ? (it.kind === "video" ? `<video src="${it.preview}" controls muted playsinline preload="metadata"></video>` : `<img src="${it.preview}" alt="">`)
-      : `<span class="up-nopic">HEIC — превью нет, но загрузится нормально</span>`;
+    if (prev !== it || !$("upPrev").firstElementChild) paintPreview(it);
     $("upNum").textContent = `${cur + 1} из ${items.length}`;
     $("upWhat").textContent = it.kind === "video" ? "видео" : "фото";
     chips().forEach(b => b.setAttribute("aria-pressed", it.tags.includes(b.dataset.tag)));
@@ -1053,7 +1105,7 @@ function viewUpload() {
     document.querySelector('[data-up-go="-1"]').disabled = cur === 0;
     document.querySelector('[data-up-go="1"]').disabled = cur === items.length - 1;
     document.querySelector("[data-up-copy]").disabled = cur === 0;
-    paintStrip();
+    markStrip();
   }
 
   const drop = $("drop"), input = $("files");
@@ -1080,7 +1132,7 @@ function viewUpload() {
     b.setAttribute("aria-pressed", on);
     const it = items[cur];
     it.tags = on ? [...it.tags, b.dataset.tag] : it.tags.filter(x => x !== b.dataset.tag);
-    paintStrip();
+    markStrip();
   };
   $("caption").oninput = () => { if (items[cur]) items[cur].caption = $("caption").value; };
   $("takenAt").onchange = () => { if (items[cur]) items[cur].takenAt = $("takenAt").value; };
@@ -1090,9 +1142,11 @@ function viewUpload() {
     if (del) {
       e.stopPropagation();
       const i = Number(del.dataset.upDel);
-      if (items[i]?.preview) URL.revokeObjectURL(items[i].preview);
+      if (items[i]) forget(items[i]);
       items.splice(i, 1);
-      return show(i <= cur ? cur - 1 : cur);
+      paintStrip();
+      $("upPrev").innerHTML = "";   // превью нарисуется заново для того, кто теперь текущий
+      return show(i < cur ? cur - 1 : cur);
     }
     if (e.target.closest("[data-up-more]")) return input.click();
     const pick = e.target.closest("[data-up-pick]"); if (pick) return show(Number(pick.dataset.upPick));
@@ -1117,7 +1171,7 @@ function viewUpload() {
       const it = items[i];
       msg.textContent = `Загружаю ${i + 1} из ${total}...`;
       bar.style.width = `${Math.max(6, (i + 0.5) / total * 100)}%`;
-      try { await uploadOne(it.file, { tags: it.tags, caption: it.caption.trim(), takenAt: it.takenAt || null }); if (it.preview) URL.revokeObjectURL(it.preview); }
+      try { await uploadOne(it.file, { tags: it.tags, caption: it.caption.trim(), takenAt: it.takenAt || null }); forget(it); }
       catch (err) { failed.push({ it, text: `${it.file.name}: ${err.message || err}` }); }
       bar.style.width = `${(i + 1) / total * 100}%`;
     }
@@ -1129,7 +1183,10 @@ function viewUpload() {
     if (failed.length) {
       // Остаются только те, что не загрузились, — со своими отметками. Повторное нажатие не задублирует загруженное
       items = failed.map(f => f.it);
+      items.forEach(it => { forget(it); it.thumbTried = false; it.thumb = it.view = it.vurl = null; it.viewing = null; });
+      paintStrip(); $("upPrev").innerHTML = "";
       show(0);
+      pumpThumbs();
       msg.className = "msg err";
       msg.textContent = `Не загрузилось ${failed.length} из ${total}: ${failed.map(f => f.text).join("; ")}`;
     } else {
