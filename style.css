@@ -1156,7 +1156,9 @@ body.viewer-open { overflow: hidden; }
 }
 .aw-back { transform: rotateY(180deg); gap: 6px; padding: 16px 14px 14px; }
 /* Оборот плотнее, чтобы топ-5, правило и ссылка влезали в карточку целиком */
-.aw-back .aw-title { font-size: 13px; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; flex: none; }
+/* overflow: hidden нужен для многоточия, но режет свечение по краю строки: даём свечению запас внутри
+   (padding) и возвращаем место отрицательным margin, поэтому вёрстка не сдвигается */
+.aw-back .aw-title { font-size: 13px; white-space: nowrap; max-width: calc(100% + 20px); overflow: hidden; text-overflow: ellipsis; flex: none; padding: 8px 10px; margin: -8px -10px; }
 /* Голографический блик, как у коллекционной карты (только у той, что в центре) */
 .aw-front::after {
   content: ""; position: absolute; inset: -50%; pointer-events: none;
