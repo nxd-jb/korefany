@@ -1067,6 +1067,7 @@ async function viewTop() {
   const best = monthMedia
     .map(x => ({ x, n: rcOf.get(x.id) || 0 }))
     .filter(o => o.n > 0).sort((a, b) => b.n - a.n).slice(0, 6).map(o => o.x);
+  await signed(best.flatMap(x => [thumbPath(x), midPath(x), x.kind === "photo" ? x.path : null]).filter(Boolean));
 
   // Награды месяца — коллекционные карточки: листаются свайпом, нажатие переворачивает.
   // Спереди победитель, на обороте — кто был рядом (топ-5) и за что дают награду
@@ -1134,8 +1135,9 @@ async function viewTop() {
     </div>
     ${state.reactsReady ? "" : `<div class="empty">Реакции ещё не включены. Нужно выполнить файл 03_reactions.sql в Supabase.</div>`}
     <section class="awards"><h2>Награды месяца</h2>${noms}</section>
-    <section><h2>Лучшие фото и видео</h2>${await grid(best, "В этом месяце ещё никто не ставил реакций. Открой любое фото и жми 😂 🔥 ❤️")}</section>`);
-  state.current = best;
+    <section class="best"><h2>Лучшие фото и видео</h2><div id="bestBox"></div></section>`);
+  state.current = state.topBest = best;
+  paintBest();
   wireAwards();
 
   document.querySelectorAll("[data-tm]").forEach(b => b.onclick = () => {
@@ -1144,6 +1146,117 @@ async function viewTop() {
     state.topMonth = { y: yy, m: mm };
     viewTop();
   });
+}
+
+// «Лучшие фото и видео» месяца. На компьютере — гармошка: полосы на всю ширину, наведёшь — полоса
+// плавно раскрывается, нажмёшь на раскрытую — откроется фото. На телефоне — карусель в 3D на всю ширину
+// экрана: в центре фото, соседние выглядывают по краям, листается свайпом
+const PHONE = matchMedia("(max-width: 700px)");
+function paintBest() {
+  const box = document.getElementById("bestBox"); if (!box) return;
+  const list = state.topBest || [];
+  if (!list.length) { box.innerHTML = `<div class="empty">В этом месяце ещё никто не ставил реакций. Открой любое фото и жми 😂 🔥 ❤️</div>`; return; }
+  const rcOf = countBy(state.mr, "media_id"), ccOf = countBy(state.comments, "media_id");
+  // Снизу превью (грузится мгновенно), поверх проступает чёткое фото. У видео — только превью
+  const pic = m => {
+    const t = url(thumbPath(m)), big = m.kind === "photo" ? url(midPath(m)) || url(m.path) : "";
+    return `<span class="b-pic">${m.kind === "video"
+      ? `<img class="b-ph" ${t ? `src="${t}"` : ""} data-vthumb="${m.id}" alt="" decoding="async"><span class="play">▶ видео</span>`
+      : `${t ? `<img class="b-ph" src="${t}" alt="" decoding="async">` : ""}${big ? `<img class="b-full fade" src="${big}" alt="" decoding="async">` : ""}`}</span>`;
+  };
+  const who = m => {
+    const rc = rcOf.get(m.id) || 0, cc = ccOf.get(m.id) || 0;
+    return `<span class="b-who">${avatar(m.owner)}<b>${esc(nameOf(m.owner))}</b>
+      <span class="b-stats"><span>🔥 ${rc}</span>${cc ? `<span>💬 ${cc}</span>` : ""}</span></span>`;
+  };
+  const label = (m, i) => `Место ${i + 1}: ${esc(nameOf(m.owner))}${m.caption ? `, ${esc(m.caption)}` : ""}`;
+  const rank = i => i < 3 ? ` r${i + 1}` : "";
+
+  if (PHONE.matches) {
+    box.innerHTML = `<div class="b-car">
+      <div class="b-stage">${list.map((m, i) => `<button type="button" class="b-card${rank(i)}" data-best="${i}" style="${ucStyle(m.owner)}" aria-label="${label(m, i)}">
+        ${pic(m)}<span class="b-num">${i + 1}</span></button>`).join("")}</div>
+      <div class="b-under"><div class="b-cur"></div>
+        ${list.length > 1 ? `<div class="b-dots">${list.map(() => "<i></i>").join("")}</div>` : ""}</div>
+    </div>`;
+    return wireBestCarousel(box, list, who);
+  }
+  box.innerHTML = `<div class="b-acc">${list.map((m, i) => `<button type="button" class="b-item${i ? "" : " on"}${rank(i)}" data-best="${i}" style="--i:${i};${ucStyle(m.owner)}" aria-label="${label(m, i)}">
+      ${pic(m)}<span class="b-num">${i + 1}</span>
+      <span class="b-info">${m.caption ? `<span class="b-cap">${esc(m.caption)}</span>` : ""}${who(m)}</span>
+      <span class="b-mini">${avatar(m.owner)}</span></button>`).join("")}</div>`;
+  wireBestAccordion(box, list);
+}
+PHONE.addEventListener?.("change", () => paintBest());
+
+function wireBestAccordion(box, list) {
+  const items = [...box.querySelectorAll(".b-item")];
+  let cur = 0, hover = null;
+  const show = i => { if (i === cur) return; cur = i; items.forEach((b, k) => b.classList.toggle("on", k === i)); };
+  items.forEach((b, i) => {
+    // Небольшая задержка: когда мышь просто пролетает над полосами, они не дёргаются
+    b.addEventListener("mouseenter", () => { clearTimeout(hover); hover = setTimeout(() => show(i), 70); });
+    b.addEventListener("mouseleave", () => clearTimeout(hover));
+    b.addEventListener("focus", () => show(i));
+    b.addEventListener("click", () => {
+      clearTimeout(hover);
+      if (i !== cur) return show(i);
+      openViewer(list[i].id, 0, b.querySelector(".b-full.loaded") || b.querySelector(".b-ph"));
+    });
+  });
+}
+
+function wireBestCarousel(box, list, who) {
+  const stage = box.querySelector(".b-stage"), cards = [...stage.children];
+  const dots = [...box.querySelectorAll(".b-dots i")], under = box.querySelector(".b-cur");
+  // От трёх фото карусель идёт по кругу: у первого слева видно последнее, и по бокам никогда не пусто
+  const n = list.length, loop = n >= 3;
+  let cur = 0;
+  const go = i => {
+    cur = loop ? (i + n) % n : Math.max(0, Math.min(n - 1, i));
+    cards.forEach((c, k) => {
+      let off = k - cur;
+      if (loop) { off = (off + n) % n; if (off > n / 2) off -= n; }
+      const a = Math.abs(off);
+      c.style.setProperty("--off", off);
+      c.style.setProperty("--side", Math.sign(off));
+      c.style.zIndex = 10 - a;
+      c.classList.toggle("on", !off);
+      c.classList.toggle("far", a > 1);
+      c.tabIndex = a > 1 ? -1 : 0;
+    });
+    dots.forEach((d, k) => d.classList.toggle("on", k === cur));
+    under.innerHTML = `${list[cur].caption ? `<span class="b-cap">${esc(list[cur].caption)}</span>` : ""}${who(list[cur])}`;
+  };
+  go(0);
+  // Свайп: карточки едут за пальцем, отпустил — перелистнулось (или вернулось, если сдвинул чуть-чуть)
+  let x0 = 0, y0 = 0, dx = 0, mode = null, moved = false;
+  stage.addEventListener("touchstart", e => { x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; dx = 0; mode = null; moved = false; }, { passive: true });
+  stage.addEventListener("touchmove", e => {
+    const mx = e.touches[0].clientX - x0, my = e.touches[0].clientY - y0;
+    if (!mode && Math.abs(mx) + Math.abs(my) > 8) mode = Math.abs(mx) > Math.abs(my) ? "x" : "y";
+    if (mode !== "x") return;
+    e.preventDefault();
+    moved = true;
+    // Если фото меньше трёх, у краёв сопротивление, как в настоящей карусели
+    dx = !loop && ((cur === 0 && mx > 0) || (cur === n - 1 && mx < 0)) ? mx / 3 : mx;
+    stage.classList.add("drag");
+    stage.style.setProperty("--dx", dx + "px");
+  }, { passive: false });
+  const end = () => {
+    if (mode !== "x") return;
+    stage.classList.remove("drag");
+    stage.style.setProperty("--dx", "0px");
+    if (Math.abs(dx) > 50) go(cur + (dx < 0 ? 1 : -1));
+    mode = null;
+  };
+  stage.addEventListener("touchend", end);
+  stage.addEventListener("touchcancel", end);
+  cards.forEach((c, i) => c.addEventListener("click", () => {
+    if (moved) { moved = false; return; }   // это был свайп, а не нажатие
+    if (i !== cur) return go(i);
+    openViewer(list[i].id, 0, c.querySelector(".b-full.loaded") || c.querySelector(".b-ph"));
+  }));
 }
 
 // Карточки-награды: свайп листает (прилипают по центру), нажатие или Enter переворачивает,
