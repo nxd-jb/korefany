@@ -856,6 +856,7 @@ function toggleVoice(id, seekFrac = null) {
   if (seekFrac !== null && voiceLength()) voicePlayer.currentTime = voiceLength() * seekFrac;
   if (voicePlayer.paused || seekFrac !== null) {
     if (audioCtx?.state === "suspended") audioCtx.resume();
+    document.querySelectorAll("video:not([data-helper])").forEach(v => v.pause());   // голосовое и видео вместе не играют
     voicePlayer.play().catch(err => {
       // Не заиграло — возвращаем кнопку ▶, иначе на ней застревала пауза. И говорим, в чём дело
       toast(err?.name === "NotAllowedError" ? "Телефон не дал включить звук — нажми ещё раз"
@@ -884,6 +885,13 @@ voicePlayer.addEventListener("error", () => {
   voicePlaying = null;
   toast("Голосовое не открылось. Если записано на Android, а слушаешь на iPhone, — дело в формате");
 });
+
+// Включили видео — голосовое на паузу (с того же места продолжится по нажатию ▶)
+function stopVoice() {
+  if (voicePlayer.paused) return;
+  voicePlayer.pause();
+  document.querySelectorAll(".voice.playing").forEach(v => v.classList.remove("playing"));
+}
 
 // Голосовые, записанные в Chrome (webm), браузер считает бесконечными: длину тогда берём из базы
 function voiceLength() {

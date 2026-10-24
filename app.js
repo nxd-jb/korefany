@@ -2371,9 +2371,21 @@ function isBlackCanvas(src, w, h) {
 // iPhone не грузит видео, которого нет на странице, — поэтому вставляем его невидимым и «включаем» без звука.
 // Если кадр вышел чёрным (не успел отрисоваться или видео начинается с темноты) — пробуем чуть дальше, до 4 раз.
 // source — файл (при загрузке) или ссылка. Не получилось — null
+// Одновременно играет только одно: включили видео — остальные видео и голосовое встают на паузу.
+// play не всплывает, поэтому ловим его на document в фазе перехвата
+function pauseOtherMedia(except) {
+  document.querySelectorAll("video:not([data-helper])").forEach(v => { if (v !== except && !v.paused) v.pause(); });
+  if (typeof stopVoice === "function") stopVoice();
+}
+document.addEventListener("play", e => {
+  const v = e.target;
+  if (v.tagName === "VIDEO" && !v.hasAttribute("data-helper")) pauseOtherMedia(v);
+}, true);
+
 function videoThumb(source) {
   return new Promise(resolve => {
     const v = document.createElement("video");
+    v.dataset.helper = "";   // служебное: его короткий запуск не должен останавливать то, что смотрит человек
     const isFile = source instanceof Blob;
     const src = isFile ? URL.createObjectURL(source) : source;
     let finished = false, tries = 0;
