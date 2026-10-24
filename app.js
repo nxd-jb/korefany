@@ -776,34 +776,55 @@ function galleryCols() {
 }
 function wireGalleryPinch(box) {
   if (!box) return;
-  let start = null, lastPinch = 0;
+  let start = null, lastPinch = 0, raf = 0;
+  const EASE = "transform .42s cubic-bezier(.22, 1, .36, 1)";
   const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
   const gridEl = () => box.querySelector(".grid.sq");
+  // Слой для масштаба нужен только на время жеста: постоянный will-change на длинной сетке
+  // заставляет iPhone держать в памяти огромную картинку, и всё дёргается
+  const settle = g => {
+    const done = e => { if (e && e.target !== g) return; g.removeEventListener("transitionend", done); if (!start) g.style.willChange = ""; };
+    g.addEventListener("transitionend", done);
+    setTimeout(done, 600);
+  };
   box.addEventListener("touchstart", e => {
     if (e.touches.length !== 2 || !PHONE.matches || !gridEl()) return;
     const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2, my = (e.touches[0].clientY + e.touches[1].clientY) / 2;
     const g = gridEl(), r = g.getBoundingClientRect();
-    start = { d: dist(e.touches), mx, my, ratio: 1, g };
+    const i = G_LEVELS.indexOf(galleryCols());
+    start = { d: dist(e.touches), mx, my, ratio: 1, g, canIn: i > 0, canOut: i < G_LEVELS.length - 1 };
     // Фото под пальцами: после смены размера сетки возвращаем его на то же место экрана
     start.anchor = document.elementFromPoint(mx, my)?.closest(".tile");
+    g.style.willChange = "transform";
     g.style.transformOrigin = `${mx - r.left}px ${my - r.top}px`;
     g.style.transition = "none";
   }, { passive: true });
   box.addEventListener("touchmove", e => {
     if (!start || e.touches.length !== 2) return;
     e.preventDefault();   // иначе iPhone приближает всю страницу
-    start.ratio = Math.max(.45, Math.min(2.2, dist(e.touches) / start.d));
-    start.g.style.transform = `scale(${start.ratio})`;
+    let r = dist(e.touches) / start.d;
+    // Дальше крупнее или мельче нельзя — сетка тянется «резинкой», а не упирается
+    if (r > 1 && !start.canIn) r = 1 + (r - 1) * .25;
+    if (r < 1 && !start.canOut) r = 1 - (1 - r) * .25;
+    // Мягкий предел вместо жёсткого: чем дальше, тем туже
+    r = r > 1 ? 1 + 1.4 * Math.tanh((r - 1) / 1.4) : 1 - .6 * Math.tanh((1 - r) / .6);
+    start.ratio = r;
+    if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (start) start.g.style.transform = `scale(${start.ratio})`; });
   }, { passive: false });
   const end = () => {
     if (!start) return;
+    cancelAnimationFrame(raf); raf = 0;
     const { ratio, g, anchor, my } = start; start = null; lastPinch = Date.now();
     const from = galleryCols(), i = G_LEVELS.indexOf(from);
     // Свёл заметно — на шаг мельче, сильно — на два; развёл — наоборот
-    const step = ratio < .5 ? 2 : ratio < .8 ? 1 : ratio > 1.8 ? -2 : ratio > 1.25 ? -1 : 0;
+    const step = ratio < .55 ? 2 : ratio < .85 ? 1 : ratio > 1.8 ? -2 : ratio > 1.18 ? -1 : 0;
     const to = G_LEVELS[Math.max(0, Math.min(G_LEVELS.length - 1, i + step))];
-    g.style.transition = "transform .35s cubic-bezier(.2, .9, .25, 1)";
-    if (to === from) { g.style.transform = ""; return; }
+    if (to === from) {
+      g.style.transition = EASE;
+      g.style.transform = "";
+      settle(g);
+      return;
+    }
     try { localStorage.setItem("korefany-gcols", to); } catch {}
     box.dataset.cols = to;
     // Новая сетка сначала того же масштаба, что был под пальцами, и плавно садится на место.
@@ -818,9 +839,9 @@ function wireGalleryPinch(box) {
     }
     g.style.transform = `scale(${ratio * to / from})`;
     void g.offsetWidth;
-    g.style.transition = "transform .38s cubic-bezier(.2, .9, .25, 1)";
+    g.style.transition = EASE;
     g.style.transform = "";
-    galleryPill(`${to} в ряд`);
+    settle(g);
   };
   box.addEventListener("touchend", e => { if (start && e.touches.length < 2) end(); });
   box.addEventListener("touchcancel", end);
@@ -834,14 +855,6 @@ function wireGalleryPinch(box) {
     try { seen = localStorage.getItem("korefany-pinch-hint"); localStorage.setItem("korefany-pinch-hint", "1"); } catch {}
     if (!seen) setTimeout(() => box.isConnected && toast("Сведи или разведи пальцы — фото станут мельче или крупнее"), 1200);
   }
-}
-let pillTimer = null;
-function galleryPill(text) {
-  let p = document.querySelector(".g-pill");
-  if (!p) { p = document.createElement("div"); p.className = "g-pill"; document.body.appendChild(p); }
-  p.textContent = text;
-  p.classList.remove("show"); void p.offsetWidth; p.classList.add("show");
-  clearTimeout(pillTimer); pillTimer = setTimeout(() => p.classList.remove("show"), 900);
 }
 
 // Что показывать в галерее (все, фото, видео) и в каком порядке. Выбор запоминается на устройстве
