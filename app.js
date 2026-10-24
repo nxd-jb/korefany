@@ -395,23 +395,32 @@ function countBy(list, key) {
   return map;
 }
 
-// square: ровная сетка из квадратов (галерея). Без него — плитки в своих пропорциях
-async function grid(list, emptyHtml, square = false) {
+// square: ровная сетка из квадратов (галерея). Без него — плитки в своих пропорциях.
+// months: перед первым фото каждого месяца — подпись месяца (видна только в мелкой сетке галереи на телефоне).
+// who: у плитки автор (виден только в крупной сетке по 2)
+async function grid(list, emptyHtml, square = false, { months = false, who = false } = {}) {
   if (!list.length) return `<div class="empty">${emptyHtml}</div>`;
   await signed(list.map(m => thumbPath(m)));
   // Считаем реакции и комментарии один раз на всю сетку, а не перебираем все реакции для каждой плитки
   const rcOf = countBy(state.mr, "media_id"), ccOf = countBy(state.comments, "media_id");
+  let lastMonth = null;
   return `<div class="grid${square ? " sq" : ""}">${list.map((m, i) => {
     const t = url(thumbPath(m));
     const rc = rcOf.get(m.id) || 0;
     const cc = ccOf.get(m.id) || 0;
-    return `<button type="button" class="tile" style="--i:${Math.min(i, 20)}" data-open="${m.id}" aria-label="${esc(m.caption || "Открыть")}">
+    let head = "";
+    if (months) {
+      const d = toDate(m.taken_at || m.created_at), k = d.getFullYear() * 12 + d.getMonth();
+      if (k !== lastMonth) { lastMonth = k; head = `<h3 class="g-month">${MONTHS[d.getMonth()]} ${d.getFullYear()}</h3>`; }
+    }
+    return `${head}<button type="button" class="tile" style="--i:${Math.min(i, 20)}" data-open="${m.id}" aria-label="${esc(m.caption || "Открыть")}">
       ${m.kind === "video"
         // Превью видео проверяет fixVideoThumbs: нет или чёрное — сделает новое и подставит
         ? `<img class="${t ? "fade " : ""}vthumb" ${t ? `src="${t}"` : ""} data-vthumb="${m.id}" alt="" loading="lazy" decoding="async">`
         : t ? `<img class="fade" src="${t}" alt="" loading="lazy" decoding="async">` : `<span class="noimg">🖼</span>`}
       ${m.kind === "video" ? `<span class="play">▶ видео</span>` : ""}
       ${rc || cc ? `<span class="rc">${rc ? `🔥 ${rc}` : ""}${rc && cc ? " · " : ""}${cc ? `💬 ${cc}` : ""}</span>` : ""}
+      ${who ? `<span class="t-who" style="${ucStyle(m.owner)}">${avatar(m.owner)}<b>${esc(nameOf(m.owner))}</b></span>` : ""}
     </button>`;
   }).join("")}</div>`;
 }
@@ -751,8 +760,88 @@ async function viewPeople() {
         </div>`;
       }).join("")}</div>
     </section>
-    <section id="galleryGrid"></section>`);
+    <section id="galleryGrid" data-cols="${galleryCols()}"></section>`);
   await renderGallery();
+  wireGalleryPinch(document.getElementById("galleryGrid"));
+}
+
+// ---------- Щипок в галерее, как в «Фото» на iPhone (только на телефоне) ----------
+// Свёл пальцы — фото мельче и больше в ряд (2 → 3 → 5 → 9), развёл — крупнее. На 5 и 9 видны подписи месяцев.
+// Сетка едет за пальцами, а при смене размера фото под пальцами остаётся на месте
+const G_LEVELS = [2, 3, 5, 9];
+function galleryCols() {
+  let n = 3;
+  try { n = +localStorage.getItem("korefany-gcols") || 3; } catch {}
+  return G_LEVELS.includes(n) ? n : 3;
+}
+function wireGalleryPinch(box) {
+  if (!box) return;
+  let start = null, lastPinch = 0;
+  const dist = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  const gridEl = () => box.querySelector(".grid.sq");
+  box.addEventListener("touchstart", e => {
+    if (e.touches.length !== 2 || !PHONE.matches || !gridEl()) return;
+    const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2, my = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+    const g = gridEl(), r = g.getBoundingClientRect();
+    start = { d: dist(e.touches), mx, my, ratio: 1, g };
+    // Фото под пальцами: после смены размера сетки возвращаем его на то же место экрана
+    start.anchor = document.elementFromPoint(mx, my)?.closest(".tile");
+    g.style.transformOrigin = `${mx - r.left}px ${my - r.top}px`;
+    g.style.transition = "none";
+  }, { passive: true });
+  box.addEventListener("touchmove", e => {
+    if (!start || e.touches.length !== 2) return;
+    e.preventDefault();   // иначе iPhone приближает всю страницу
+    start.ratio = Math.max(.45, Math.min(2.2, dist(e.touches) / start.d));
+    start.g.style.transform = `scale(${start.ratio})`;
+  }, { passive: false });
+  const end = () => {
+    if (!start) return;
+    const { ratio, g, anchor, my } = start; start = null; lastPinch = Date.now();
+    const from = galleryCols(), i = G_LEVELS.indexOf(from);
+    // Свёл заметно — на шаг мельче, сильно — на два; развёл — наоборот
+    const step = ratio < .5 ? 2 : ratio < .8 ? 1 : ratio > 1.8 ? -2 : ratio > 1.25 ? -1 : 0;
+    const to = G_LEVELS[Math.max(0, Math.min(G_LEVELS.length - 1, i + step))];
+    g.style.transition = "transform .35s cubic-bezier(.2, .9, .25, 1)";
+    if (to === from) { g.style.transform = ""; return; }
+    try { localStorage.setItem("korefany-gcols", to); } catch {}
+    box.dataset.cols = to;
+    // Новая сетка сначала того же масштаба, что был под пальцами, и плавно садится на место.
+    // Мерить место фото можно только без масштаба
+    g.style.transition = "none";
+    g.style.transform = "";
+    if (anchor?.isConnected) {
+      const a = anchor.getBoundingClientRect();
+      scrollBy(0, a.top + a.height / 2 - my);
+      const r = g.getBoundingClientRect(), ar = anchor.getBoundingClientRect();
+      g.style.transformOrigin = `${ar.left + ar.width / 2 - r.left}px ${ar.top + ar.height / 2 - r.top}px`;
+    }
+    g.style.transform = `scale(${ratio * to / from})`;
+    void g.offsetWidth;
+    g.style.transition = "transform .38s cubic-bezier(.2, .9, .25, 1)";
+    g.style.transform = "";
+    galleryPill(`${to} в ряд`);
+  };
+  box.addEventListener("touchend", e => { if (start && e.touches.length < 2) end(); });
+  box.addEventListener("touchcancel", end);
+  // Пальцы отпустили не одновременно — второй не должен «нажать» на фото
+  box.addEventListener("click", e => { if (Date.now() - lastPinch < 400) { e.stopPropagation(); e.preventDefault(); } }, true);
+  // Safari приближает страницу своим жестом, даже если touchmove отменён — гасим и его
+  box.addEventListener("gesturestart", e => e.preventDefault());
+  // Подсказка один раз на устройство
+  if (PHONE.matches) {
+    let seen = false;
+    try { seen = localStorage.getItem("korefany-pinch-hint"); localStorage.setItem("korefany-pinch-hint", "1"); } catch {}
+    if (!seen) setTimeout(() => box.isConnected && toast("Сведи или разведи пальцы — фото станут мельче или крупнее"), 1200);
+  }
+}
+let pillTimer = null;
+function galleryPill(text) {
+  let p = document.querySelector(".g-pill");
+  if (!p) { p = document.createElement("div"); p.className = "g-pill"; document.body.appendChild(p); }
+  p.textContent = text;
+  p.classList.remove("show"); void p.offsetWidth; p.classList.add("show");
+  clearTimeout(pillTimer); pillTimer = setTimeout(() => p.classList.remove("show"), 900);
 }
 
 // Что показывать в галерее (все, фото, видео) и в каком порядке. Выбор запоминается на устройстве
@@ -812,7 +901,8 @@ async function renderGallery() {
   const title = f ? `${what}, где есть ${esc(nameOf(f))}` : kind === "all" ? "Все фото и видео" : `Только ${what.toLowerCase()}`;
   const changed = kind !== "all" || sort !== "new";
   const gridHtml = await grid(list, f ? `${what}, где есть ${esc(nameOf(f))}, пока нет.${kind === "all" ? " Загрузи и отметь." : ""}`
-    : kind === "video" ? "Видео пока нет." : `Пока пусто. <a href="#/upload">Загрузи первое фото</a>.`, true);
+    : kind === "video" ? "Видео пока нет." : `Пока пусто. <a href="#/upload">Загрузи первое фото</a>.`, true,
+    { months: sort === "new" || sort === "old", who: true });
   if (seq !== gallerySeq || !box.isConnected) return;
   box.innerHTML = `
     <div class="gallery-head">
