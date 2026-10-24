@@ -717,8 +717,17 @@ const tagged = id => state.media.filter(m => m.people.includes(id));
 
 async function viewPeople() {
   const rcOf = countBy(state.mr, "media_id"), months = allMonthStats();
-  const bestOf = id => tagged(id).sort((a, b) => (rcOf.get(b.id) || 0) - (rcOf.get(a.id) || 0))[0];
-  const covers = state.profiles.map(p => bestOf(p.id)).filter(Boolean);
+  // Каждому своё фото: первыми выбирают те, у кого фото меньше всего; занятые фото пропускаются,
+  // а из свободных берётся то, где меньше людей (человек виднее), потом — где больше реакций.
+  // Повтор только если у человека все фото уже заняты
+  const pick = new Map(), used = new Set();
+  [...state.profiles].sort((a, b) => tagged(a.id).length - tagged(b.id).length).forEach(p => {
+    const list = tagged(p.id).sort((a, b) =>
+      used.has(a.id) - used.has(b.id) || a.people.length - b.people.length || (rcOf.get(b.id) || 0) - (rcOf.get(a.id) || 0));
+    if (list[0]) { pick.set(p.id, list[0]); used.add(list[0].id); }
+  });
+  const bestOf = id => pick.get(id);
+  const covers = [...pick.values()];
   await signed(covers.map(thumbPath));
   if (state.galleryFilter && !profile(state.galleryFilter)) state.galleryFilter = null;
   shell("people", `
