@@ -220,16 +220,41 @@ async function refreshInBackground(oldRaw) {
 // Ушёл из приложения — запоминаем, что накопилось (новые комментарии, реакции)
 document.addEventListener("visibilitychange", () => { if (document.hidden && state.session) saveCache(); });
 
-// Файлы закрытые, поэтому для показа берём временные ссылки на час
+// ---------- Файлы ----------
+// Фото, видео и голосовые лежат в Yandex Object Storage. Ключ от него есть только у функции files в Supabase:
+// она проверяет, кто спрашивает, и выдаёт временные ссылки — посмотреть, загрузить или удалить
+async function filesApi(body) {
+  const { data, error } = await sb.functions.invoke("files", { body });
+  if (error) {
+    let msg = error.message;
+    try { msg = (await error.context.json()).error || msg; } catch (e) {}
+    throw new Error(msg);
+  }
+  return data;
+}
+// Ссылки на просмотр: { путь: ссылка }. Пустая ссылка — файла нет (например, среднего размера у старого фото)
+async function signFiles(bucket, paths) {
+  const { urls, ttl } = await filesApi({ op: "sign", bucket, paths });
+  return { urls: urls || {}, until: Date.now() + Math.max(0, (ttl || 0) - 15 * 60e3) };
+}
+async function putFile(bucket, path, blob, type) {
+  const { url, headers } = await filesApi({ op: "put", bucket, path, type: type || "application/octet-stream" });
+  const r = await fetch(url, { method: "PUT", headers, body: blob });
+  if (!r.ok) throw new Error("хранилище ответило " + r.status);
+}
+// Удаление не мешает остальному: если не вышло, файл просто останется лежать
+const removeFiles = (bucket, paths) => paths.length ? filesApi({ op: "del", bucket, paths }).catch(() => {}) : Promise.resolve();
+
+// Файлы закрытые, поэтому для показа берём временные ссылки (живут не меньше 6 часов)
 async function signed(paths) {
   const now = Date.now();
   const need = [...new Set(paths.filter(Boolean))].filter(p => !state.urls[p] || state.urls[p].until < now);
   // Порции по 100 уходят одновременно, а не по очереди
   await Promise.all(Array.from({ length: Math.ceil(need.length / 100) }, async (_, i) => {
     const part = need.slice(i * 100, i * 100 + 100);
-    const { data } = await sb.storage.from(BUCKET).createSignedUrls(part, 3600);
-    // Файла нет (например, среднего размера у старого фото) — запоминаем пустую ссылку, чтобы не спрашивать снова
-    if (data) data.forEach(r => { if (r.path) state.urls[r.path] = { url: r.signedUrl || "", until: now + 50 * 60 * 1000 }; });
+    const r = await signFiles(BUCKET, part).catch(() => null);
+    // Пустую ссылку тоже запоминаем, чтобы не спрашивать снова
+    if (r) part.forEach(p => { if (p in r.urls) state.urls[p] = { url: r.urls[p], until: r.until }; });
   }));
 }
 const url = p => state.urls[p]?.url || "";
@@ -1440,7 +1465,7 @@ function wireMePictures(p) {
     const old = p[field];
     const { error } = await sb.from("profiles").update({ [field]: newPath }).eq("id", me());
     if (error) throw error;
-    if (old) await sb.storage.from(BUCKET).remove([old]);
+    if (old) await removeFiles(BUCKET, [old]);
     await loadAll(); viewMe();
   };
   document.querySelectorAll("[data-remove]").forEach(b => b.onclick = () => save(b.dataset.remove === "cover" ? "cover_path" : "avatar_path", null)
@@ -1452,8 +1477,7 @@ function wireMePictures(p) {
       // Аватарка — квадрат 400px, обложка — широкая картинка до 1600px
       const blob = what === "avatar" ? await cropSquare(f, 400) : await resizeImage(f, 1600, 0.85);
       const path = `${me()}/${what}-${Date.now()}.jpg`;
-      const { error } = await sb.storage.from(BUCKET).upload(path, blob, { contentType: "image/jpeg" });
-      if (error) throw error;
+      await putFile(BUCKET, path, blob, "image/jpeg");
       await save(what === "avatar" ? "avatar_path" : "cover_path", path);
     } catch (err) { msg.className = "msg err"; msg.textContent = "Не получилось: " + (err.message || err); }
   };
@@ -1986,7 +2010,7 @@ document.addEventListener("click", async e => {
     // Сначала запись в базе, потом файлы: если удаление не прошло, пост не останется без картинки
     const { error } = await sb.from("media").delete().eq("id", m.id);
     if (error) { del.disabled = false; del.textContent = "Не удалилось, ещё раз?"; return; }
-    await sb.storage.from(BUCKET).remove([m.path, thumbPath(m), midPath(m)].filter(Boolean));
+    await removeFiles(BUCKET, [m.path, thumbPath(m), midPath(m)].filter(Boolean));
     closeViewer(); await loadAll(); route();
   }
 });
@@ -2024,14 +2048,14 @@ async function uploadOne(file, { tags, caption, takenAt }) {
   }
 
   const path = `${me()}/${id}.${ext}`;
-  let r = await sb.storage.from(BUCKET).upload(path, main, { contentType: isVideo ? file.type : "image/jpeg" });
-  if (r.error) throw r.error;
+  await putFile(BUCKET, path, main, isVideo ? file.type : "image/jpeg");
+  // Превью и средний размер не обязательны: без них сайт покажет оригинал
   await Promise.all([
-    thumb && sb.storage.from(BUCKET).upload(`${me()}/${id}_t.jpg`, thumb, { contentType: "image/jpeg" }),
-    mid && sb.storage.from(BUCKET).upload(`${me()}/${id}_m.jpg`, mid, { contentType: "image/jpeg" })
+    thumb && putFile(BUCKET, `${me()}/${id}_t.jpg`, thumb, "image/jpeg").catch(() => {}),
+    mid && putFile(BUCKET, `${me()}/${id}_m.jpg`, mid, "image/jpeg").catch(() => {})
   ]);
 
-  r = await sb.from("media").insert({ id, path, kind: isVideo ? "video" : "photo", caption: caption || null, taken_at: takenAt });
+  let r = await sb.from("media").insert({ id, path, kind: isVideo ? "video" : "photo", caption: caption || null, taken_at: takenAt });
   if (r.error) throw r.error;
   if (tags.length) {
     r = await sb.from("media_people").insert(tags.map(person_id => ({ media_id: id, person_id })));
@@ -2197,9 +2221,8 @@ function queueVthumb(m, replace) {
     // Своё видео — сохраняем новое превью для всех (один раз на устройство)
     if (m.owner !== me() || vthumbFixed.has(m.id)) return;
     const tp = thumbPath(m);
-    if (replace) await sb.storage.from(BUCKET).remove([tp]);
-    const { error } = await sb.storage.from(BUCKET).upload(tp, blob, { contentType: "image/jpeg" });
-    if (error) return;
+    // Новый файл просто ложится поверх старого
+    try { await putFile(BUCKET, tp, blob, "image/jpeg"); } catch (e) { return; }
     vthumbFixed.add(m.id);
     try { localStorage.setItem(vthumbFixedKey, JSON.stringify([...vthumbFixed])); } catch (e) {}
     delete state.urls[tp];

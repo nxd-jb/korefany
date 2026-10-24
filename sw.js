@@ -32,8 +32,11 @@ self.addEventListener("fetch", (e) => {
     return;
   }
 
-  // Фото из хранилища (напрямую или через Netlify): /storage/v1/object/sign/<bucket>/<путь>?token=...
-  const pic = u.pathname.match(/\/storage\/v1\/object\/sign\/(media|chat)\/(.+)$/);
+  // Фото из хранилища: Yandex (storage.yandexcloud.net/<бакет>/<media|chat>/<путь>?X-Amz-...)
+  // или старое из Supabase (/storage/v1/object/sign/<media|chat>/<путь>?token=...). Ключ в памяти у обоих один
+  const pic = u.hostname === "storage.yandexcloud.net"
+    ? u.pathname.match(/^\/[^/]+\/(media|chat)\/(.+)$/)
+    : u.pathname.match(/\/storage\/v1\/object\/sign\/(media|chat)\/(.+)$/);
   if (pic && req.destination === "image" && !req.headers.has("range")) {
     e.respondWith(cachedPic(req, `https://pics.korefany/${pic[1]}/${pic[2]}`));
     return;

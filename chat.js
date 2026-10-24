@@ -163,8 +163,8 @@ async function chatSigned(paths) {
   const need = [...new Set(paths.filter(Boolean))].filter(p => !chat.urls[p] || chat.urls[p].until < now + 10 * 60e3);
   // Порциями по 100, как и в ленте: в переписке бывает 200 сообщений с фото и голосовыми
   for (let i = 0; i < need.length; i += 100) {
-    const { data } = await sb.storage.from(CHAT_BUCKET).createSignedUrls(need.slice(i, i + 100), 3600);
-    (data || []).forEach(r => { if (r.signedUrl) chat.urls[r.path] = { url: r.signedUrl, until: now + 50 * 60 * 1000 }; });
+    const r = await signFiles(CHAT_BUCKET, need.slice(i, i + 100)).catch(() => null);
+    if (r) Object.entries(r.urls).forEach(([p, u]) => { if (u) chat.urls[p] = { url: u, until: r.until }; });
   }
 }
 const chatUrl = p => chat.urls[p]?.url || "";
@@ -1094,16 +1094,14 @@ async function sendMessage(c, { text = null, file = null, audio = null, duration
     if (file) {
       const blob = await resizeImage(file, 1920, 0.85);
       image_path = `${c.id}/${me()}-${crypto.randomUUID()}.jpg`;
-      const up = await sb.storage.from(CHAT_BUCKET).upload(image_path, blob, { contentType: "image/jpeg" });
-      if (up.error) throw up.error;
+      await putFile(CHAT_BUCKET, image_path, blob, "image/jpeg");
       await chatSigned([image_path]);
     }
     if (audio) {
       const ext = /mp4|aac|m4a/.test(audio.type) ? "m4a" : /ogg/.test(audio.type) ? "ogg" : "webm";
       audio_path = `${c.id}/${me()}-${crypto.randomUUID()}.${ext}`;
       // Тип без хвоста «;codecs=...»: с ним некоторые телефоны не узнают файл, когда скачивают его обратно
-      const up = await sb.storage.from(CHAT_BUCKET).upload(audio_path, audio, { contentType: (audio.type || "audio/webm").split(";")[0] });
-      if (up.error) throw up.error;
+      await putFile(CHAT_BUCKET, audio_path, audio, (audio.type || "audio/webm").split(";")[0]);
       await chatSigned([audio_path]);
     }
     const row = { chat_id: c.id, text, image_path, reply_to: replyTo };
@@ -1352,7 +1350,7 @@ async function deleteMessage(id) {
   if (error) { toast("Не получилось удалить"); return; }
   // Файл фото или голосового тоже стираем, чтобы не занимал место
   const files = [m.image_path, m.audio_path].filter(Boolean);
-  if (files.length) sb.storage.from(CHAT_BUCKET).remove(files);
+  removeFiles(CHAT_BUCKET, files);
   removeMessage(id);
 }
 function removeMessage(id) {
