@@ -213,7 +213,7 @@ async function refreshInBackground(oldRaw) {
   refreshChatSide();
   if (raw === oldRaw) return;
   const h = location.hash.replace(/^#/, "") || "/";
-  const calm = !document.getElementById("viewer") && scrollY < 40 && !document.activeElement?.matches?.("input, textarea") &&
+  const calm = !document.getElementById("viewer") && !document.querySelector(".gs-wrap, .me-wrap") && scrollY < 40 && !document.activeElement?.matches?.("input, textarea") &&
     !/^\/(chat|upload|me)/.test(h);
   if (calm) route();
 }
@@ -722,8 +722,9 @@ async function viewPeople() {
   // Повтор только если у человека все фото уже заняты
   const pick = new Map(), used = new Set();
   [...state.profiles].sort((a, b) => tagged(a.id).length - tagged(b.id).length).forEach(p => {
+    // Видео — только если фото нет: у старых видео превью бывает чёрным или его нет совсем
     const list = tagged(p.id).sort((a, b) =>
-      used.has(a.id) - used.has(b.id) || a.people.length - b.people.length || (rcOf.get(b.id) || 0) - (rcOf.get(a.id) || 0));
+      used.has(a.id) - used.has(b.id) || (a.kind === "video") - (b.kind === "video") || a.people.length - b.people.length || (rcOf.get(b.id) || 0) - (rcOf.get(a.id) || 0));
     if (list[0]) { pick.set(p.id, list[0]); used.add(list[0].id); }
   });
   const bestOf = id => pick.get(id);
@@ -795,8 +796,11 @@ function sortMedia(list, sort) {
   return list.sort(newer);
 }
 
-// Перерисовать только сетку и подсветку постеров, без перезагрузки всей страницы
+// Перерисовать только сетку и подсветку постеров, без перезагрузки всей страницы.
+// gallerySeq: быстро переключили несколько раз — сетку рисует только последний вызов
+let gallerySeq = 0;
 async function renderGallery() {
+  const seq = ++gallerySeq;
   const f = state.galleryFilter, { kind, sort } = galleryView();
   document.querySelectorAll("[data-gfilter]").forEach(b => b.setAttribute("aria-pressed", b.dataset.gfilter === f));
   document.getElementById("posters")?.classList.toggle("filtered", !!f);
@@ -807,6 +811,9 @@ async function renderGallery() {
   const what = kind === "video" ? "Видео" : kind === "photo" ? "Фото" : "Фото и видео";
   const title = f ? `${what}, где есть ${esc(nameOf(f))}` : kind === "all" ? "Все фото и видео" : `Только ${what.toLowerCase()}`;
   const changed = kind !== "all" || sort !== "new";
+  const gridHtml = await grid(list, f ? `${what}, где есть ${esc(nameOf(f))}, пока нет.${kind === "all" ? " Загрузи и отметь." : ""}`
+    : kind === "video" ? "Видео пока нет." : `Пока пусто. <a href="#/upload">Загрузи первое фото</a>.`, true);
+  if (seq !== gallerySeq || !box.isConnected) return;
   box.innerHTML = `
     <div class="gallery-head">
       <div class="g-title"><h2>${title} <span class="g-count">${list.length}</span></h2>
@@ -815,8 +822,7 @@ async function renderGallery() {
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
       </button>
     </div>
-    ${await grid(list, f ? `${what}, где есть ${esc(nameOf(f))}, пока нет.${kind === "all" ? " Загрузи и отметь." : ""}`
-      : kind === "video" ? "Видео пока нет." : `Пока пусто. <a href="#/upload">Загрузи первое фото</a>.`, true)}`;
+    ${gridHtml}`;
 }
 
 // Шторка «Фильтр и порядок»: на телефоне снизу, на компьютере окном по центру.
