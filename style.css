@@ -1061,6 +1061,50 @@ body.viewer-open { overflow: hidden; }
 .gallery-head h2 { margin: 0; }
 .g-count { color: var(--accent); margin-left: 4px; }
 .g-reset { font-size: 13px; color: var(--accent-2); }
+/* Заголовок сетки галереи: слева что показано и в каком порядке, справа кнопка шторки «Фильтр и порядок» */
+.gallery-head { align-items: center; flex-wrap: nowrap; }
+.g-title { min-width: 0; }
+.g-sort { display: block; font-size: 13px; color: var(--muted); }
+.g-filter { position: relative; flex: none; width: 44px; height: 44px; display: grid; place-items: center; padding: 0; border-radius: 14px; border: 1px solid #3a2f52; background: var(--panel); color: var(--fg); cursor: pointer; transition: border-color .2s, box-shadow .2s, color .2s; }
+.g-filter svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.g-filter:hover { border-color: var(--accent); }
+.g-filter.on { color: var(--accent); border-color: var(--accent); box-shadow: 0 0 12px rgba(255, 79, 216, .35); }
+.g-filter.on::after { content: ""; position: absolute; right: 6px; top: 6px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+
+/* Шторка «Фильтр и порядок» (как .me-wrap: на телефоне снизу, на компьютере по центру) */
+.gs-wrap { position: fixed; left: 0; right: 0; top: var(--vvt, 0px); height: var(--vvh, 100dvh); z-index: 80; display: flex; flex-direction: column; justify-content: flex-end; }
+.gs-wrap.open .pv-dim { opacity: 1; }
+.gs-sheet {
+  position: relative; display: grid; gap: 10px; max-height: 88%; overflow-y: auto; overscroll-behavior: contain;
+  background: var(--panel); border-top: 1px solid var(--line); border-radius: 22px 22px 0 0; box-shadow: 0 -10px 40px rgba(255, 79, 216, .15);
+  padding: 0 16px calc(18px + env(safe-area-inset-bottom, 0px));
+  transform: translateY(100%); transition: transform .3s cubic-bezier(.2, .9, .25, 1);
+}
+.gs-wrap.open .gs-sheet { transform: none; }
+#gsBody { display: grid; gap: 10px; }
+.gs-h { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+.gs-h h3 { margin: 0; font-size: 13px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+.gs-h .link-btn { font-size: 13px; color: var(--accent-2); }
+.gs-kinds { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.gs-kind { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 12px 6px; border-radius: 16px; border: 1px solid transparent; background: var(--panel-2); color: var(--fg); cursor: pointer; transition: border-color .2s, box-shadow .2s, background .2s; }
+.gs-kind svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; stroke-linecap: round; }
+.gs-kind b { font-size: 14px; }
+.gs-kind small { font-size: 12px; color: var(--muted); }
+.gs-kind[aria-pressed="true"] { background: rgba(255, 79, 216, .15); border-color: var(--accent); box-shadow: 0 0 14px rgba(255, 79, 216, .4); }
+.gs-kind[aria-pressed="true"] svg { stroke: var(--accent); }
+.gs-sorts { display: grid; gap: 2px; }
+.gs-sort { display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 0 12px; border: 0; border-radius: 12px; background: transparent; color: var(--fg); font-size: 15px; font-weight: 600; text-align: left; cursor: pointer; }
+.gs-sort i { flex: 0 0 18px; height: 18px; box-sizing: border-box; border-radius: 50%; border: 2px solid #4a3e66; transition: border .2s, box-shadow .2s; }
+.gs-sort[aria-checked="true"] { background: rgba(62, 230, 255, .1); }
+.gs-sort[aria-checked="true"] i { border: 5px solid var(--accent-2); box-shadow: 0 0 10px rgba(62, 230, 255, .6); }
+.gs-go { margin-top: 6px; min-height: 48px; font-size: 15px; }
+@media (min-width: 701px) {
+  .gs-wrap { align-items: center; justify-content: center; }
+  .gs-sheet { width: min(420px, 92vw); border: 1px solid var(--line); border-radius: 22px; padding: 22px; transform: translateY(20px) scale(.97); opacity: 0; transition: transform .3s cubic-bezier(.2, 1.2, .4, 1), opacity .25s; }
+  .gs-wrap.open .gs-sheet { opacity: 1; transform: none; }
+  .gs-sheet .pv-grab { display: none; }
+  .gs-sort:not([aria-checked="true"]):hover, .gs-kind:not([aria-pressed="true"]):hover { background: rgba(255, 255, 255, .05); }
+}
 
 /* Ровная сетка из квадратов */
 .grid.sq { column-width: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px; }

@@ -754,20 +754,114 @@ async function viewPeople() {
   await renderGallery();
 }
 
+// Что показывать в галерее (все, фото, видео) и в каком порядке. Выбор запоминается на устройстве
+const G_KINDS = [
+  ["all", "Все", `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></svg>`],
+  ["photo", "Фото", `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="9" cy="10" r="1.6"/><path d="M4 17l5-4 4 3 3-2 4 3"/></svg>`],
+  ["video", "Видео", `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.2v5.6l4.8-2.8z"/></svg>`]
+];
+const G_SORTS = [["new", "Сначала новые"], ["old", "Сначала старые"], ["top", "Больше реакций"], ["talk", "Больше комментариев"], ["rnd", "Вперемешку"]];
+function galleryView() {
+  if (!state.gview) {
+    let v = {};
+    try { v = JSON.parse(localStorage.getItem("korefany-gallery") || "{}"); } catch {}
+    state.gview = {
+      kind: G_KINDS.some(k => k[0] === v.kind) ? v.kind : "all",
+      sort: G_SORTS.some(s => s[0] === v.sort) ? v.sort : "new"
+    };
+  }
+  return state.gview;
+}
+function setGalleryView(patch) {
+  Object.assign(galleryView(), patch);
+  if (patch.sort === "rnd") state.gshuffle = null;   // нажал «Вперемешку» ещё раз — перемешать заново
+  try { localStorage.setItem("korefany-gallery", JSON.stringify(state.gview)); } catch {}
+}
+const ofKind = (list, kind) => kind === "all" ? list : list.filter(m => m.kind === kind);
+function sortMedia(list, sort) {
+  const when = m => m.taken_at || m.created_at;
+  const newer = (a, b) => when(b).localeCompare(when(a));
+  if (sort === "old") return list.sort((a, b) => -newer(a, b));
+  if (sort === "top" || sort === "talk") {
+    const n = countBy(sort === "top" ? state.mr : state.comments, "media_id");
+    return list.sort((a, b) => (n.get(b.id) || 0) - (n.get(a.id) || 0) || newer(a, b));
+  }
+  if (sort === "rnd") {
+    // Случайный порядок держится, пока не выберешь «Вперемешку» снова, чтобы сетка не прыгала
+    const r = state.gshuffle ||= new Map();
+    for (const m of list) if (!r.has(m.id)) r.set(m.id, Math.random());
+    return list.sort((a, b) => r.get(a.id) - r.get(b.id));
+  }
+  return list.sort(newer);
+}
+
 // Перерисовать только сетку и подсветку постеров, без перезагрузки всей страницы
 async function renderGallery() {
-  const f = state.galleryFilter;
+  const f = state.galleryFilter, { kind, sort } = galleryView();
   document.querySelectorAll("[data-gfilter]").forEach(b => b.setAttribute("aria-pressed", b.dataset.gfilter === f));
   document.getElementById("posters")?.classList.toggle("filtered", !!f);
-  const list = [...(f ? tagged(f) : state.media)].sort((a, b) => (b.taken_at || b.created_at).localeCompare(a.taken_at || a.created_at));
+  const list = sortMedia([...ofKind(f ? tagged(f) : state.media, kind)], sort);
   state.current = list;
+  paintGallerySheet();
   const box = document.getElementById("galleryGrid"); if (!box) return;
-  const title = f ? `Фото, где есть ${esc(nameOf(f))}` : "Все фото и видео";
+  const what = kind === "video" ? "Видео" : kind === "photo" ? "Фото" : "Фото и видео";
+  const title = f ? `${what}, где есть ${esc(nameOf(f))}` : kind === "all" ? "Все фото и видео" : `Только ${what.toLowerCase()}`;
+  const changed = kind !== "all" || sort !== "new";
   box.innerHTML = `
-    <div class="gallery-head"><h2>${title} <span class="g-count">${list.length}</span></h2>
-      ${f ? `<button type="button" class="link-btn g-reset" data-gfilter-reset>Показать все</button>` : ""}</div>
-    ${await grid(list, f ? `Фото, где есть ${esc(nameOf(f))}, пока нет. Загрузи и отметь.` : `Пока пусто. <a href="#/upload">Загрузи первое фото</a>.`, true)}`;
+    <div class="gallery-head">
+      <div class="g-title"><h2>${title} <span class="g-count">${list.length}</span></h2>
+        <span class="g-sort">${G_SORTS.find(s => s[0] === sort)[1]}${f ? ` · <button type="button" class="link-btn g-reset" data-gfilter-reset>Показать всех</button>` : ""}</span></div>
+      <button type="button" class="g-filter${changed ? " on" : ""}" data-gsheet aria-label="Фильтр и порядок" title="Фильтр и порядок">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/></svg>
+      </button>
+    </div>
+    ${await grid(list, f ? `${what}, где есть ${esc(nameOf(f))}, пока нет.${kind === "all" ? " Загрузи и отметь." : ""}`
+      : kind === "video" ? "Видео пока нет." : `Пока пусто. <a href="#/upload">Загрузи первое фото</a>.`, true)}`;
 }
+
+// Шторка «Фильтр и порядок»: на телефоне снизу, на компьютере окном по центру.
+// Выбор применяется сразу, сетка за шторкой перерисовывается
+function openGallerySheet() {
+  document.querySelector(".gs-wrap")?.remove();
+  const w = document.createElement("div");
+  w.className = "gs-wrap";
+  w.innerHTML = `<div class="pv-dim" data-gs-close></div>
+    <div class="gs-sheet" role="dialog" aria-label="Фильтр и порядок"><div class="pv-grab" data-gs-close></div><div id="gsBody"></div></div>`;
+  document.body.appendChild(w);
+  paintGallerySheet();
+  void w.offsetWidth; w.classList.add("open");
+  w.querySelector(".gs-kind[aria-pressed=true]")?.focus({ preventScroll: true });
+}
+function closeGallerySheet() {
+  const w = document.querySelector(".gs-wrap"); if (!w) return;
+  w.classList.remove("open"); setTimeout(() => w.remove(), 280);
+}
+function paintGallerySheet() {
+  const body = document.getElementById("gsBody"); if (!body) return;
+  const { kind, sort } = galleryView(), f = state.galleryFilter;
+  const base = f ? tagged(f) : state.media;
+  // Перерисовка не должна терять фокус с клавиатуры
+  const was = document.activeElement?.closest?.("#gsBody button");
+  const again = was && (was.dataset.gsKind ? `[data-gs-kind="${was.dataset.gsKind}"]` : was.dataset.gsSort ? `[data-gs-sort="${was.dataset.gsSort}"]` : null);
+  body.innerHTML = `
+    <div class="gs-h"><h3>Показать</h3>${kind !== "all" || sort !== "new" ? `<button type="button" class="link-btn" data-gs-reset>Сбросить</button>` : ""}</div>
+    <div class="gs-kinds">${G_KINDS.map(([k, label, icon]) =>
+      `<button type="button" class="gs-kind" data-gs-kind="${k}" aria-pressed="${kind === k}">${icon}<b>${label}</b><small>${ofKind(base, k).length}</small></button>`).join("")}</div>
+    <div class="gs-h"><h3>Порядок</h3></div>
+    <div class="gs-sorts" role="radiogroup" aria-label="Порядок">${G_SORTS.map(([s, label]) =>
+      `<button type="button" class="gs-sort" role="radio" data-gs-sort="${s}" aria-checked="${sort === s}"><i></i>${label}</button>`).join("")}</div>
+    <button type="button" class="btn primary gs-go" data-gs-close>Показать ${state.current.length}</button>`;
+  if (again) body.querySelector(again)?.focus({ preventScroll: true });
+}
+document.addEventListener("click", e => {
+  if (e.target.closest("[data-gsheet]")) return openGallerySheet();
+  if (!e.target.closest(".gs-wrap")) return;
+  const k = e.target.closest("[data-gs-kind]"), s = e.target.closest("[data-gs-sort]");
+  if (k) { setGalleryView({ kind: k.dataset.gsKind }); renderGallery(); }
+  else if (s) { setGalleryView({ sort: s.dataset.gsSort }); renderGallery(); }
+  else if (e.target.closest("[data-gs-reset]")) { setGalleryView({ kind: "all", sort: "new" }); renderGallery(); }
+  else if (e.target.closest("[data-gs-close]")) closeGallerySheet();
+});
 
 async function viewPerson(id) {
   const p = profile(id);
@@ -2027,6 +2121,7 @@ document.addEventListener("keydown", e => {
   // Постер-фильтр в галерее выбирается и с клавиатуры
   if ((e.key === "Enter" || e.key === " ") && e.target.matches?.("[data-gfilter]")) { e.preventDefault(); e.target.click(); return; }
   // Открыто окно «Изменить фото» — Esc закрывает только его, а не просмотр под ним
+  if (e.key === "Escape" && document.querySelector(".gs-wrap")) { closeGallerySheet(); return; }
   const editor = document.querySelector(".me-wrap");
   if (e.key === "Escape" && editor) { editor.classList.remove("open"); setTimeout(() => editor.remove(), 280); return; }
   if (!document.getElementById("viewer")) return;
@@ -2270,6 +2365,7 @@ async function route() {
   if (!state.session) return viewLogin();
   const seq = ++routeSeq;
   closeViewer(true);
+  document.querySelector(".gs-wrap")?.remove();   // шторка «Фильтр и порядок» галереи
   clearInterval(coverTimer);   // ушли с ленты — обложка больше не листается
   feedObserver?.disconnect();  // и посты больше не подгружаем
   feedKeeper?.disconnect(); feedKeeper = null;
