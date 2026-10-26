@@ -157,6 +157,17 @@ function noteOtherRead(r) {
   if (!chat.othersRead[r.chat_id] || r.last_read_at > chat.othersRead[r.chat_id]) chat.othersRead[r.chat_id] = r.last_read_at;
 }
 
+// Запрос «где id из списка» — порциями по 100, все сразу. Список из 200–300 id одной строкой давал адрес
+// в 8–12 тысяч символов, а такие длинные адреса посредники (запасной путь через Netlify) могут не пропустить.
+// Если хоть одна порция не пришла — data: null (иначе при сверке недостающее посчиталось бы удалённым)
+async function selectIn(table, cols, col, ids) {
+  if (!ids.length) return { data: [], error: null };
+  const parts = await Promise.all(Array.from({ length: Math.ceil(ids.length / 100) },
+    (_, i) => sb.from(table).select(cols).in(col, ids.slice(i * 100, i * 100 + 100))));
+  const bad = parts.find(p => p.error);
+  return bad ? { data: null, error: bad.error } : { data: parts.flatMap(p => p.data || []), error: null };
+}
+
 async function chatSigned(paths) {
   const now = Date.now();
   // Обновляем и те, что скоро истекут (меньше 10 минут): голосовое должно запускаться без ожидания
@@ -345,8 +356,8 @@ async function viewChat(id) {
   const ids = chat.messages.map(x => x.id);
   const pollIds = chat.messages.filter(x => x.poll).map(x => x.id);
   const [r, v] = await Promise.all([
-    ids.length ? sb.from("message_reactions").select("*").in("message_id", ids) : { data: [] },
-    pollIds.length ? sb.from("poll_votes").select("*").in("message_id", pollIds) : { data: [] }
+    selectIn("message_reactions", "*", "message_id", ids),
+    selectIn("poll_votes", "*", "message_id", pollIds)
   ]);
   chat.reacts = r.data || [];
   chat.votes = v.data || [];
@@ -1067,8 +1078,8 @@ async function jumpToMessage(id, createdAt) {
     // Реакции и голоса в опросах для подгруженных сообщений, иначе они показались бы пустыми
     const ids = chat.messages.map(x => x.id), pollIds = chat.messages.filter(x => x.poll).map(x => x.id);
     const [r, v] = await Promise.all([
-      ids.length ? sb.from("message_reactions").select("*").in("message_id", ids) : { data: [] },
-      pollIds.length ? sb.from("poll_votes").select("*").in("message_id", pollIds) : { data: [] }
+      selectIn("message_reactions", "*", "message_id", ids),
+      selectIn("poll_votes", "*", "message_id", pollIds)
     ]);
     chat.reacts = r.data || []; chat.votes = v.data || [];
     await chatSigned(msgFiles(chat.messages));
@@ -1362,7 +1373,13 @@ async function deleteMessage(id) {
   removeMessage(id);
 }
 function removeMessage(id) {
+  const gone = chat.messages.find(x => x.id === id);
   chat.messages = chat.messages.filter(x => x.id !== id);
+  // Удалили последнее сообщение чата — в списке слева теперь предыдущее, а не удалённое
+  if (gone && chat.last[gone.chat_id]?.id === id) {
+    chat.last[gone.chat_id] = chat.messages.filter(x => x.chat_id === gone.chat_id && !x.pending).pop() || null;
+    refreshChatSide();
+  }
   // Удалили закреплённое — полоска сверху тоже пропадает
   const c = chat.list.find(x => x.id === chat.open);
   if (c && c.pinned_message === id) { c.pinned_message = null; paintPin(c); }
@@ -1651,17 +1668,27 @@ function toggleAddPeople() {
   box.hidden = false;
 }
 
+// Фото из чата на весь экран. Кнопка «Назад» на телефоне закрывает его, а не уводит из переписки
+// (раньше уводила, а фото оставалось висеть поверх списка чатов)
 function openLightbox(src) {
   if (!src) return;
   const lb = document.createElement("div");
   lb.className = "lightbox";
   lb.innerHTML = `<button type="button" class="btn lb-close" aria-label="Закрыть">✕</button><img src="${src}" alt="">`;
-  const close = () => { lb.classList.add("out"); setTimeout(() => lb.remove(), 200); document.removeEventListener("keydown", onKey); };
+  const close = (fromBack = false) => {
+    if (lb.classList.contains("out")) return;
+    lb.classList.add("out"); setTimeout(() => lb.remove(), 200);
+    document.removeEventListener("keydown", onKey);
+    if (!fromBack && history.state?.lightbox) history.back();
+  };
   const onKey = e => { if (e.key === "Escape") close(); };
-  lb.onclick = close;   // нажатие куда угодно, в том числе на крестик, закрывает
+  lb.closeBox = close;
+  lb.onclick = () => close();   // нажатие куда угодно, в том числе на крестик, закрывает
   document.addEventListener("keydown", onKey);
   document.body.appendChild(lb);
+  history.pushState({ lightbox: true }, "");
 }
+window.addEventListener("popstate", () => document.querySelector(".lightbox")?.closeBox?.(true));
 
 // ---------- «Печатает...» ----------
 // Пока пишешь, раз в 2 секунды сообщаем остальным через живой канал. Сохранять в базу не нужно.
@@ -1763,6 +1790,11 @@ function chatOnMessage(type, n, o) {
   }
   if (type === "DELETE" && o?.id) {
     if (chat.open === o.chat_id || chat.messages.some(x => x.id === o.id)) removeMessage(o.id);
+    // Удалили последнее сообщение в другом чате — подпись в списке берём свежую из базы
+    else if (o.chat_id && chat.last[o.chat_id]?.id === o.id) {
+      sb.from("messages").select("*").eq("chat_id", o.chat_id).order("created_at", { ascending: false }).limit(1).maybeSingle()
+        .then(({ data }) => { chat.last[o.chat_id] = data || null; refreshChatSide(); });
+    }
   }
 }
 
@@ -1804,8 +1836,8 @@ async function chatPoll() {
     const ids = chat.messages.map(x => x.id);
     if (!ids.length) return;
     const [still, r] = await Promise.all([
-      sb.from("messages").select("id").in("id", ids),
-      sb.from("message_reactions").select("*").in("message_id", ids)
+      selectIn("messages", "id", "id", ids),
+      selectIn("message_reactions", "*", "message_id", ids)
     ]);
     if (still.data) {
       const alive = new Set(still.data.map(x => x.id));
@@ -1820,7 +1852,7 @@ async function chatPoll() {
     // Голоса в опросах и закреплённое сообщение
     const pollIds = chat.messages.filter(x => x.poll).map(x => x.id);
     if (pollIds.length) {
-      const pv = await sb.from("poll_votes").select("*").in("message_id", pollIds);
+      const pv = await selectIn("poll_votes", "*", "message_id", pollIds);
       if (pv.data) { chat.votes = pv.data; pollIds.forEach(paintPoll); }
     }
     const ch = await sb.from("chats").select("*").eq("id", chat.open).maybeSingle();

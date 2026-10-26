@@ -141,6 +141,10 @@ async function fetchAll(build) {
   }
 }
 
+// Строка media из базы → фото на сайте: отметки людей — простым списком id (вложенный media_people не храним,
+// он только раздувал сохранённые на телефоне данные)
+const toMedia = ({ media_people, ...x }) => ({ ...x, people: (media_people || []).map(r => r.person_id) });
+
 async function loadAll() {
   const [p, m, q, mr, qr, c] = await Promise.all([
     sb.from("profiles").select("*").order("name"),
@@ -158,10 +162,19 @@ async function loadAll() {
   if (p.error || m.error) throw p.error || m.error;
   state.profiles = p.data;
   await signed(state.profiles.flatMap(x => [x.avatar_path, x.cover_path]).filter(Boolean));
-  state.media = m.data.map(x => ({ ...x, people: x.media_people.map(r => r.person_id) }));
+  state.media = m.data.map(toMedia);
   // Если таблицу цитат ещё не создали, остальной сайт всё равно работает
   state.quotesReady = !q.error;
   state.quotes = q.data || [];
+}
+
+// Только профили — после смены имени, статуса, аватарки или обложки. Быстрее, чем перекачивать все фото и реакции
+async function reloadProfiles() {
+  const { data, error } = await sb.from("profiles").select("*").order("name");
+  if (error) throw error;
+  state.profiles = data;
+  await signed(state.profiles.flatMap(x => [x.avatar_path, x.cover_path]).filter(Boolean));
+  saveCache();
 }
 
 // ---------- Сохранённые данные: сайт открывается сразу, а свежие данные догружаются следом ----------
@@ -413,7 +426,7 @@ async function grid(list, emptyHtml, square = false, { months = false, who = fal
       const d = toDate(m.taken_at || m.created_at), k = d.getFullYear() * 12 + d.getMonth();
       if (k !== lastMonth) { lastMonth = k; head = `<h3 class="g-month">${MONTHS[d.getMonth()]} ${d.getFullYear()}</h3>`; }
     }
-    return `${head}<button type="button" class="tile" style="--i:${Math.min(i, 20)}" data-open="${m.id}" aria-label="${esc(m.caption || "Открыть")}">
+    return `${head}<button type="button" class="tile${isNew(m) ? " is-new" : ""}" style="--i:${Math.min(i, 20)}" data-open="${m.id}" aria-label="${esc(m.caption || "Открыть")}">
       ${m.kind === "video"
         // Превью видео проверяет fixVideoThumbs: нет или чёрное — сделает новое и подставит
         ? `<img class="${t ? "fade " : ""}vthumb" ${t ? `src="${t}"` : ""} data-vthumb="${m.id}" alt="" loading="lazy" decoding="async">`
@@ -425,22 +438,131 @@ async function grid(list, emptyHtml, square = false, { months = false, who = fal
   }).join("")}</div>`;
 }
 
+// ---------- Новое для тебя ----------
+// Что ты уже видел, помнит само устройство: общая отметка «Всё видел» (base), у каждого корефана — «до этого времени
+// всё посмотрено» (by) и отдельные посмотренные фото (ids). Новое — чужие фото, загруженные позже отметок и ещё не
+// открытые. Свои фото новыми не бывают. Отдельные фото нужны, чтобы просмотр свежей пачки не «съедал» более старую,
+// которую ты ещё не видел
+const NEW_DAYS = 3;   // при первом запуске новым считается то, что загрузили за последние три дня
+const ms = d => new Date(d).getTime() || 0;
+function seenMarks() {
+  if (state.seen?.uid === me()) return state.seen;
+  let v = null;
+  try { v = JSON.parse(localStorage.getItem("korefany-seen-" + me()) || "null"); } catch {}
+  const first = !v || typeof v.base !== "number";
+  state.seen = { uid: me(), base: first ? Date.now() - NEW_DAYS * 864e5 : v.base, by: (!first && v.by) || {}, ids: new Set((!first && v.ids) || []) };
+  if (first) saveSeen();
+  return state.seen;
+}
+function saveSeen() {
+  const s = state.seen;
+  try { localStorage.setItem("korefany-seen-" + s.uid, JSON.stringify({ base: s.base, by: s.by, ids: [...s.ids] })); } catch {}
+}
+const isNew = m => {
+  if (!me() || m.owner === me()) return false;
+  const s = seenMarks();
+  return ms(m.created_at) > Math.max(s.base, s.by[m.owner] || 0) && !s.ids.has(m.id);
+};
+// Новые сверху — по времени загрузки, а не по дате снимка
+const byAdded = (a, b) => ms(b.created_at) - ms(a.created_at);
+const newMedia = () => state.media.filter(isNew).sort(byAdded);
+function markViewed(list) {
+  const s = seenMarks();
+  list.forEach(m => { if (isNew(m)) s.ids.add(m.id); });
+  // У кого посмотрено всё новое — отдельные отметки заменяем одной «до этого времени», чтобы список не рос
+  const owners = new Set(state.media.filter(m => s.ids.has(m.id)).map(m => m.owner));
+  owners.forEach(o => {
+    const fresh = state.media.filter(m => m.owner === o && ms(m.created_at) > Math.max(s.base, s.by[o] || 0));
+    if (!fresh.every(m => s.ids.has(m.id))) return;
+    s.by[o] = fresh.reduce((t, m) => Math.max(t, ms(m.created_at)), s.by[o] || 0);
+    fresh.forEach(m => s.ids.delete(m.id));
+  });
+  // Удалённые фото из отметок убираем
+  if (state.media.length) { const alive = new Set(state.media.map(m => m.id)); s.ids.forEach(id => { if (!alive.has(id)) s.ids.delete(id); }); }
+  saveSeen();
+}
+function markAllViewed() {
+  const s = seenMarks();
+  s.base = state.media.reduce((t, m) => Math.max(t, ms(m.created_at)), s.base);
+  s.by = {}; s.ids.clear();
+  saveSeen();
+}
+// Новое по людям: [[кто, [его фото...]], ...], первым — кто загрузил позже всех
+function byOwner(list) {
+  const map = new Map();
+  for (const m of list) { if (!map.has(m.owner)) map.set(m.owner, []); map.get(m.owner).push(m); }
+  return [...map.entries()];
+}
+// «12 фото и 1 видео»
+function countText(list) {
+  const v = list.filter(m => m.kind === "video").length, p = list.length - v;
+  return [p && `${p} фото`, v && `${v} видео`].filter(Boolean).join(" и ");
+}
+// «сегодня в 21:46», «вчера в 9:05», иначе «24 октября 2026»
+function whenText(d) {
+  const x = new Date(d), t = new Date(), y = new Date(t); y.setDate(t.getDate() - 1);
+  const hm = `${x.getHours()}:${String(x.getMinutes()).padStart(2, "0")}`;
+  if (x.toDateString() === t.toDateString()) return `сегодня в ${hm}`;
+  if (x.toDateString() === y.toDateString()) return `вчера в ${hm}`;
+  return dayText(x);
+}
+
 // Лента «как это было»: посты как в Инстаграме, новые сверху, между месяцами — подпись месяца.
 // Посты подгружаются порциями по мере прокрутки, чтобы не грузить сразу все фото
 const FEED_STEP = 10;
 let feedObserver = null;
 
+// Порядок ленты выбирается в шторке и запоминается на устройстве
+const F_SORTS = [["taken", "По дате события", "когда снято"], ["added", "По дате добавления", "когда загрузили"],
+  ["top", "Популярные", "больше реакций"], ["talk", "Обсуждаемые", "больше комментариев"], ["rnd", "Вперемешку", ""]];
+function feedSort() {
+  if (!state.fsort) {
+    let v = null;
+    try { v = localStorage.getItem("korefany-feed-sort"); } catch {}
+    state.fsort = F_SORTS.some(s => s[0] === v) ? v : "taken";
+  }
+  return state.fsort;
+}
+function feedList(sort) {
+  const list = [...state.media];
+  if (sort === "taken") return list.sort((a, b) => (b.taken_at || b.created_at).localeCompare(a.taken_at || a.created_at));
+  if (sort === "added") return list.sort(byAdded);
+  return sortMedia(list, sort);
+}
+const SORT_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4"/></svg>`;
+
+// Над лентой: синяя «Смотреть новые фото» и значок порядка (или полоска «Новые для тебя», когда они открыты)
+function feedBarHtml() {
+  if (!state.media.length) return "";
+  if (state.fnew && state.fnewList) return `<div class="newsbar" id="feedBar"><span>Новые для тебя <b>${state.fnewList.length}</b></span>
+      <button type="button" class="link-btn" data-seen-all>Всё видел</button>
+      <button type="button" class="newsbar-x" data-fnew-close aria-label="Показать всю ленту">✕</button></div>`;
+  const n = newMedia().length, sort = feedSort(), sortName = F_SORTS.find(s => s[0] === sort)[1];
+  return `<div class="feed-top" id="feedBar"><div class="feedbar${n ? "" : " only-sort"}">
+      ${n ? `<button type="button" class="newbtn" data-fnew>Смотреть новые фото <em>${n}</em></button>` : ""}
+      <button type="button" class="sortbtn" data-fsheet aria-label="Порядок ленты: ${sortName}" title="Порядок ленты">${SORT_ICON}${n ? "" : `<span>${sortName}</span>`}</button>
+    </div>
+    ${n && sort !== "taken" ? `<p class="feedsub">Порядок: <b>${sortName.toLowerCase()}</b></p>` : ""}</div>`;
+}
+
 async function viewFeed() {
-  const list = [...state.media].sort((a, b) => (b.taken_at || b.created_at).localeCompare(a.taken_at || a.created_at));
-  state.feed = { list, shown: 0, lastMonth: null };
+  // «Новые для тебя»: список запоминается, когда нажал кнопку, — посмотренные посты не пропадают из-под пальца
+  const fresh = state.fnew && state.fnewList;
+  const sort = feedSort();
+  const list = fresh ? state.fnewList : feedList(sort);
+  state.feed = { list, shown: 0, lastMonth: null, months: !fresh && sort === "taken", fresh };
   state.current = list;
+  // На телефоне кнопка над обложкой — видна сразу. На компьютере — под обложкой, над колонкой постов
+  const bar = feedBarHtml(), top = PHONE.matches;
   shell("feed", `
     ${bdayBanner()}
-    ${await coverHtml()}
+    ${top ? bar : ""}
+    ${fresh ? "" : await coverHtml()}
+    ${top ? "" : bar}
     ${list.length ? `<div class="feed" id="feed"></div><div class="feed-more" id="feedMore"></div>`
+      : fresh ? `<div class="empty">Ничего нового, ты всё видел. <button type="button" class="link-btn" data-fnew-close>Показать всю ленту</button></div>`
       : `<div class="empty">Пока ничего нет. <a href="#/upload">Загрузи первое фото</a>, и с него начнётся история.</div>`}`);
-  startCover();
-  wireParallax();
+  if (!fresh) { startCover(); wireParallax(); }
   if (!list.length) return;
   await appendPosts();
   // Когда долистали до низа — подгружаем следующие посты
@@ -478,17 +600,24 @@ async function appendPosts() {
   if (!document.body.contains(feed)) return;
   let html = "";
   part.forEach((m, i) => {
-    const month = monthOf(m);
-    if (month !== f.lastMonth) { html += `<div class="feed-month"><span>${month}</span></div>`; f.lastMonth = month; }
+    // Подписи месяцев только в порядке «по дате события»: в остальных месяцы идут вперемешку
+    const month = f.months && monthOf(m);
+    if (month && month !== f.lastMonth) { html += `<div class="feed-month"><span>${month}</span></div>`; f.lastMonth = month; }
     html += postHtml(m, i);
   });
+  // В «Новых для тебя» показанные посты считаются посмотренными (метку «НОВОЕ» они уже получили)
+  if (f.fresh) markViewed(part);
   // Выплывают только первые посты. Догруженные при прокрутке встают сразу, иначе при быстрой прокрутке
   // их ловишь полупрозрачными и с задержкой
   if (f.shown > part.length) html = html.replaceAll(`<article class="post"`, `<article class="post quiet"`);
   feed.insertAdjacentHTML("beforeend", html);
   keepNear(feed);
   const more = document.getElementById("feedMore");
-  if (more) more.textContent = f.shown < f.list.length ? "Загружаю ещё..." : "Это всё. Дальше история только начинается 🔥";
+  if (more) {
+    if (f.shown < f.list.length) more.textContent = "Загружаю ещё...";
+    else if (f.fresh) more.innerHTML = `Ты всё посмотрел ✓ <button type="button" class="link-btn" data-fnew-close>Показать всю ленту</button>`;
+    else more.textContent = "Это всё. Дальше история только начинается 🔥";
+  }
   // Низ ленты всё ещё на экране (короткие посты или быстрая прокрутка) — догружаем следующую порцию сами
   if (more && f.shown < f.list.length && more.getBoundingClientRect().top < innerHeight + 1600) setTimeout(appendPosts, 50);
 }
@@ -498,6 +627,7 @@ function postHtml(m, i = 0) {
   return `<article class="post" data-post="${m.id}" style="--i:${i}">
     <header class="post-head">
       <a href="#/p/${m.owner}" class="post-who" style="${ucStyle(m.owner)}">${avatar(m.owner)}<div><b>${esc(nameOf(m.owner))}</b><span>${dayText(m.taken_at || m.created_at)}</span></div></a>
+      ${isNew(m) ? `<span class="post-new">Новое</span>` : ""}
       <button type="button" class="post-edit" data-edit-media="${m.id}" aria-label="${m.owner === me() ? "Изменить: кто на фото, подпись, дата" : "Отметить, кто на фото"}" title="${m.owner === me() ? "Изменить" : "Отметить, кто на фото"}">${m.owner === me() ? "✎" : "👥"}</button>
     </header>
     <div class="post-media" data-post-media="${m.id}">${m.kind === "video"
@@ -790,7 +920,8 @@ function wireGalleryPinch(box) {
   box.addEventListener("touchstart", e => {
     if (e.touches.length !== 2 || !PHONE.matches || !gridEl()) return;
     const mx = (e.touches[0].clientX + e.touches[1].clientX) / 2, my = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-    const g = gridEl(), r = g.getBoundingClientRect();
+    // Во вкладке «Новое» сеток несколько (по человеку) — масштабируем ту, что под пальцами
+    const g = document.elementFromPoint(mx, my)?.closest("#galleryGrid .grid.sq") || gridEl(), r = g.getBoundingClientRect();
     const i = G_LEVELS.indexOf(galleryCols());
     start = { d: dist(e.touches), mx, my, ratio: 1, g, canIn: i > 0, canOut: i < G_LEVELS.length - 1 };
     // Фото под пальцами: после смены размера сетки возвращаем его на то же место экрана
@@ -898,6 +1029,12 @@ function sortMedia(list, sort) {
   return list.sort(newer);
 }
 
+// Вкладки над сеткой галереи: «Все · N» и «Новое · N»
+const galleryTabsHtml = (all, fresh) => `<div class="g-tabs" role="tablist">
+    <button type="button" class="g-tab" role="tab" data-gnew="0" aria-selected="${!state.gnew}">Все · ${all}</button>
+    <button type="button" class="g-tab new" role="tab" data-gnew="1" aria-selected="${!!state.gnew}">${fresh ? `<i></i>` : ""}Новое · ${fresh}</button>
+  </div>`;
+
 // Перерисовать только сетку и подсветку постеров, без перезагрузки всей страницы.
 // gallerySeq: быстро переключили несколько раз — сетку рисует только последний вызов
 let gallerySeq = 0;
@@ -906,10 +1043,27 @@ async function renderGallery() {
   const f = state.galleryFilter, { kind, sort } = galleryView();
   document.querySelectorAll("[data-gfilter]").forEach(b => b.setAttribute("aria-pressed", b.dataset.gfilter === f));
   document.getElementById("posters")?.classList.toggle("filtered", !!f);
-  const list = sortMedia([...ofKind(f ? tagged(f) : state.media, kind)], sort);
+  const base = ofKind(f ? tagged(f) : state.media, kind);
+  const fresh = base.filter(isNew).sort(byAdded);
+  const list = state.gnew ? fresh : sortMedia([...base], sort);
   state.current = list;
   paintGallerySheet();
   const box = document.getElementById("galleryGrid"); if (!box) return;
+  const tabs = galleryTabsHtml(base.length, fresh.length);
+  if (state.gnew) {
+    // Новое по людям: кто загрузил и сколько, под этим — его фото
+    const groups = byOwner(fresh);
+    const parts = await Promise.all(groups.map(async ([who, items]) => `
+      <a class="new-who" href="#/new/${who}" style="${ucStyle(who)}">${avatar(who)}<b>${esc(nameOf(who))}</b>
+        <span>${whenText(items[0].created_at)} · ${countText(items)}</span></a>
+      ${await grid(items, "", true)}`));
+    if (seq !== gallerySeq || !box.isConnected) return;
+    box.innerHTML = `${tabs}
+      ${fresh.length
+        ? `<div class="new-bar"><span>Фото, которые ты ещё не видел${f ? `, где есть ${esc(nameOf(f))}` : ""}</span><button type="button" class="link-btn" data-seen-all>Всё видел</button></div>${parts.join("")}`
+        : `<div class="empty">Ничего нового, ты всё видел ✓</div>`}`;
+    return;
+  }
   const what = kind === "video" ? "Видео" : kind === "photo" ? "Фото" : "Фото и видео";
   const title = f ? `${what}, где есть ${esc(nameOf(f))}` : kind === "all" ? "Все фото и видео" : `Только ${what.toLowerCase()}`;
   const changed = kind !== "all" || sort !== "new";
@@ -917,7 +1071,7 @@ async function renderGallery() {
     : kind === "video" ? "Видео пока нет." : `Пока пусто. <a href="#/upload">Загрузи первое фото</a>.`, true,
     { months: sort === "new" || sort === "old", who: true });
   if (seq !== gallerySeq || !box.isConnected) return;
-  box.innerHTML = `
+  box.innerHTML = `${tabs}
     <div class="gallery-head">
       <div class="g-title"><h2>${title} <span class="g-count">${list.length}</span></h2>
         <span class="g-sort">${G_SORTS.find(s => s[0] === sort)[1]}${f ? ` · <button type="button" class="link-btn g-reset" data-gfilter-reset>Показать всех</button>` : ""}</span></div>
@@ -963,6 +1117,8 @@ function paintGallerySheet() {
   if (again) body.querySelector(again)?.focus({ preventScroll: true });
 }
 document.addEventListener("click", e => {
+  const tab = e.target.closest("[data-gnew]");
+  if (tab) { state.gnew = tab.dataset.gnew === "1"; return renderGallery(); }
   if (e.target.closest("[data-gsheet]")) return openGallerySheet();
   if (!e.target.closest(".gs-wrap")) return;
   const k = e.target.closest("[data-gs-kind]"), s = e.target.closest("[data-gs-sort]");
@@ -971,6 +1127,112 @@ document.addEventListener("click", e => {
   else if (e.target.closest("[data-gs-reset]")) { setGalleryView({ kind: "all", sort: "new" }); renderGallery(); }
   else if (e.target.closest("[data-gs-close]")) closeGallerySheet();
 });
+
+// Шторка «Что смотреть» в ленте: новые для тебя и порядок. Устроена как шторка галереи
+function openFeedSheet() {
+  document.querySelector(".gs-wrap")?.remove();
+  const n = newMedia().length, sort = feedSort();
+  const w = document.createElement("div");
+  w.className = "gs-wrap";
+  w.innerHTML = `<div class="pv-dim" data-gs-close></div>
+    <div class="gs-sheet" role="dialog" aria-label="Что смотреть"><div class="pv-grab" data-gs-close></div>
+      <div class="gs-h"><h3>Что смотреть</h3></div>
+      ${n ? `<button type="button" class="fs-new" data-fnew><span>Новые для тебя</span><em>${n}</em></button>` : ""}
+      <div class="gs-sorts" role="radiogroup" aria-label="Порядок ленты">${F_SORTS.map(([s, label, hint]) =>
+        `<button type="button" class="gs-sort" role="radio" data-fs-sort="${s}" aria-checked="${sort === s}"><i></i>${label}${hint ? `<small>${hint}</small>` : ""}</button>`).join("")}</div>
+    </div>`;
+  document.body.appendChild(w);
+  void w.offsetWidth; w.classList.add("open");
+  w.querySelector(".gs-sort[aria-checked=true]")?.focus({ preventScroll: true });
+}
+function openFreshFeed() {
+  state.fnew = true;
+  state.fnewList = newMedia();
+  closeGallerySheet();
+  if ((location.hash.replace(/^#/, "") || "/") === "/") route(); else location.hash = "#/";
+}
+function closeFreshFeed() {
+  state.fnew = false; state.fnewList = null;
+  route();
+}
+document.addEventListener("click", e => {
+  if (e.target.closest("[data-fsheet]")) return openFeedSheet();
+  if (e.target.closest("[data-fnew]")) return openFreshFeed();
+  if (e.target.closest("[data-fnew-close]")) return closeFreshFeed();
+  const s = e.target.closest("[data-fs-sort]");
+  if (s) {
+    state.fsort = s.dataset.fsSort;
+    if (state.fsort === "rnd") state.gshuffle = null;   // «Вперемешку» ещё раз — перемешать заново
+    try { localStorage.setItem("korefany-feed-sort", state.fsort); } catch {}
+    closeGallerySheet();
+    state.fnew = false; state.fnewList = null;
+    route();
+    return;
+  }
+  // «Всё видел»: и в ленте, и в галерее
+  if (e.target.closest("[data-seen-all]")) {
+    markAllViewed();
+    state.fnew = false; state.fnewList = null; state.gnew = false;
+    toast("Готово: всё отмечено просмотренным");
+    route();
+  }
+});
+
+// Пачка одного человека: сюда ведут уведомления «Влад загрузил 12 фото».
+// #/new/<кто>/<последнее фото пачки>/<сколько в пачке> — ровно та пачка; #/new/<кто> — что ты у него ещё не видел
+// (а если всё видел — его последняя загрузка: фото, загруженные подряд с перерывами меньше двух часов)
+const batchRetried = new Set();
+async function viewBatch(owner, lastId, n) {
+  let all = state.media.filter(m => m.owner === owner).sort(byAdded);
+  let at = lastId ? all.findIndex(m => m.id === lastId) : -1;
+  // Открыли из уведомления, а сайт показывает сохранённое на телефоне — этой пачки там ещё нет. Дозабираем новое
+  if (lastId && at < 0 && !batchRetried.has(lastId)) {
+    batchRetried.add(lastId);
+    shell("feed", `<div class="loading">Загружаю новые фото...</div>`);
+    await mergeNewMedia();
+    all = state.media.filter(m => m.owner === owner).sort(byAdded);
+    at = all.findIndex(m => m.id === lastId);
+  }
+  let list = at >= 0 ? all.slice(at, at + Math.max(1, Math.min(+n || 1, 500))) : all.filter(isNew);
+  if (!list.length && all.length) {
+    let i = 1;
+    while (i < all.length && ms(all[i - 1].created_at) - ms(all[i].created_at) < 2 * 3600e3) i++;
+    list = all.slice(0, i);
+  }
+  if (!list.length) {
+    shell("feed", `<div class="empty">Тут пока пусто. <a href="#/">В ленту</a></div>`);
+    return;
+  }
+  const [first, ...rest] = list;
+  const big = first.kind === "photo" ? (midPath(first)) : thumbPath(first);
+  await signed([big, first.path, thumbPath(first)]);
+  // Кто ещё загрузил новое — показываем внизу, чтобы не возвращаться в ленту
+  const others = byOwner(newMedia().filter(m => m.owner !== owner));
+  const heroSrc = url(big) || (first.kind === "photo" ? url(first.path) : "");
+  shell("feed", `
+    <section class="batch" style="${ucStyle(owner)}">
+      <div class="batch-head">
+        <a href="#/" class="batch-back" aria-label="В ленту">‹</a>
+        <a href="#/p/${owner}" class="batch-ava">${avatar(owner)}</a>
+        <div><h1>${esc(nameOf(owner))}</h1><span>загрузил ${countText(list)} · ${whenText(first.created_at)}</span></div>
+      </div>
+      <button type="button" class="batch-hero" data-open="${first.id}" aria-label="${esc(first.caption || "Открыть")}">
+        ${first.kind === "video" ? `<img class="${heroSrc ? "fade " : ""}vthumb" ${heroSrc ? `src="${heroSrc}"` : ""} data-vthumb="${first.id}" alt="">`
+          : heroSrc ? `<img class="fade" src="${heroSrc}" alt="">` : `<span class="noimg">🖼</span>`}
+        ${first.kind === "video" ? `<span class="play">▶ видео</span>` : ""}
+        ${first.caption ? `<span class="batch-cap">${esc(first.caption)}</span>` : ""}
+      </button>
+      ${rest.length ? await grid(rest, "", true) : ""}
+      <div class="batch-btns">
+        <button type="button" class="btn primary" data-open="${first.id}">▶ Смотреть подряд</button>
+        <a class="btn" href="#/people">Вся галерея</a>
+      </div>
+      ${others.map(([who, items]) => `<a class="batch-more" href="#/new/${who}">${avatar(who)}
+        <span>Ещё новое: <b>${esc(nameOf(who))}</b> · ${countText(items)}</span><em>Открыть</em></a>`).join("")}
+    </section>`);
+  state.current = list;   // в просмотре листаются только фото этой пачки
+  markViewed(list);
+}
 
 async function viewPerson(id) {
   const p = profile(id);
@@ -1084,14 +1346,18 @@ function viewQuotes() {
     const btn = e.target.querySelector('button[type="submit"]');
     if (btn.disabled) return;
     btn.disabled = true;   // двойное нажатие не создаёт две одинаковые цитаты
-    const { error } = await sb.from("quotes").insert({
+    const text = document.getElementById("qText").value.trim();
+    if (!text) { btn.disabled = false; m.className = "msg err"; m.textContent = "Напиши, что было сказано."; return; }
+    const { data, error } = await sb.from("quotes").insert({
       kind: document.querySelector('[data-qk][aria-pressed="true"]').dataset.qk,
-      text: document.getElementById("qText").value.trim(),
+      text,
       author_id: document.querySelector('[data-who][aria-pressed="true"]').dataset.who || null,
       context: document.getElementById("qContext").value.trim() || null
-    });
+    }).select().single();
     if (error) { btn.disabled = false; m.className = "msg err"; m.textContent = "Не сохранилось. Попробуй ещё раз."; return; }
-    await loadAll(); viewQuotes();
+    // Новая цитата встаёт сверху сразу — без перекачки всех данных сайта
+    if (!state.quotes.some(q => q.id === data.id)) state.quotes.unshift(data);
+    saveCache(); viewQuotes();
   };
 }
 
@@ -1464,6 +1730,12 @@ function viewUpload() {
     paintStrip();
     show(first);
     pumpThumbs();
+    // Настоящая дата съёмки из самого фото — если человек ещё не поставил дату сам
+    fresh.filter(it => it.kind === "photo").forEach(it => exifDate(it.file).then(d => {
+      if (!d || it.dateSet || !items.includes(it)) return;
+      it.takenAt = d;
+      if (items[cur] === it && $("takenAt")) $("takenAt").value = d;
+    }));
   };
 
   // ВАЖНО для iPhone: на экране только уменьшенные копии. Раньше в ленте стояли оригиналы по 12 Мп,
@@ -1579,7 +1851,7 @@ function viewUpload() {
     markStrip();
   };
   $("caption").oninput = () => { if (items[cur]) items[cur].caption = $("caption").value; };
-  $("takenAt").onchange = () => { if (items[cur]) items[cur].takenAt = $("takenAt").value; };
+  $("takenAt").onchange = () => { if (items[cur]) { items[cur].takenAt = $("takenAt").value; items[cur].dateSet = true; } };
 
   $("upEditor").onclick = e => {
     const del = e.target.closest("[data-up-del]");
@@ -1598,7 +1870,7 @@ function viewUpload() {
     const say = t => { const m = $("upMsg"); m.className = "msg ok"; m.textContent = t; setTimeout(() => { if (m.textContent === t) m.textContent = ""; }, 2500); };
     if (e.target.closest("[data-up-copy]") && cur > 0) { items[cur].tags = [...items[cur - 1].tags]; show(cur); return say("Отметки как на прошлом"); }
     if (e.target.closest("[data-up-alltags]")) { const t = items[cur].tags; items.forEach(it => it.tags = [...t]); show(cur); return say(t.length ? `Отметки поставлены на все ${items.length}` : "Отметки убраны со всех"); }
-    if (e.target.closest("[data-up-alldate]")) { const d = items[cur].takenAt; items.forEach(it => it.takenAt = d); return say(`Дата поставлена на все ${items.length}`); }
+    if (e.target.closest("[data-up-alldate]")) { const d = items[cur].takenAt; items.forEach(it => { it.takenAt = d; it.dateSet = true; }); return say(`Дата поставлена на все ${items.length}`); }
   };
 
   $("upForm").onsubmit = async e => {
@@ -1623,6 +1895,11 @@ function viewUpload() {
     if (failed.length < total) sb.rpc("announce_media").then(() => {}, () => {});
     await loadAll();
     busy = false;
+    // Пока грузилось, человек ушёл на другую страницу — формы уже нет, сообщаем плашкой
+    if (!e.target.isConnected) {
+      toast(failed.length ? `Не загрузилось ${failed.length} из ${total}. Открой «Загрузить» и выбери их снова` : `Загружено: ${total} ${plural(total, ["файл", "файла", "файлов"])}`);
+      return;
+    }
     $("upForm").classList.remove("uploading");
     if (failed.length) {
       // Остаются только те, что не загрузились, — со своими отметками. Повторное нажатие не задублирует загруженное
@@ -1692,7 +1969,11 @@ function renderMeTab() {
     box.querySelectorAll("[data-color]").forEach(b => b.onclick = async () => {
       box.querySelectorAll("[data-color]").forEach(x => x.setAttribute("aria-pressed", x === b));
       const { error } = await sb.from("profiles").update({ color: b.dataset.color }).eq("id", me());
-      if (error) return toast("Не получилось сменить цвет");
+      if (error) {
+        // Не сохранилось — подсветка возвращается на прежний цвет
+        box.querySelectorAll("[data-color]").forEach(x => x.setAttribute("aria-pressed", x.dataset.color === (profile(me())?.color || "pink")));
+        return toast("Не получилось сменить цвет");
+      }
       // Перекрашиваем шапку на месте, без перерисовки вкладки: недописанные имя и статус в форме не пропадут
       const mine = profile(me()); if (mine) mine.color = b.dataset.color;
       document.querySelector(".phero")?.setAttribute("style", ucStyle(me()));
@@ -1710,7 +1991,8 @@ function renderMeTab() {
         pinned_quote: document.getElementById("pQuote").value || null
       }).eq("id", me());
       if (error) { m.className = "msg err"; m.textContent = "Не сохранилось. Попробуй ещё раз."; return; }
-      await loadAll(); viewMe();
+      await reloadProfiles().catch(() => {}); viewMe();
+      toast("Сохранено");
     };
   }
 
@@ -1790,8 +2072,8 @@ function wireMePictures(p) {
     const old = p[field];
     const { error } = await sb.from("profiles").update({ [field]: newPath }).eq("id", me());
     if (error) throw error;
-    if (old) await removeFiles(BUCKET, [old]);
-    await loadAll(); viewMe();
+    if (old) removeFiles(BUCKET, [old]);
+    await reloadProfiles().catch(() => {}); viewMe();
   };
   document.querySelectorAll("[data-remove]").forEach(b => b.onclick = () => save(b.dataset.remove === "cover" ? "cover_path" : "avatar_path", null)
     .catch(err => { msg.className = "msg err"; msg.textContent = "Не получилось: " + (err.message || err); }));
@@ -2321,22 +2603,31 @@ document.addEventListener("click", async e => {
   if (delq) {
     if (delq.textContent !== "точно удалить?") { delq.textContent = "точно удалить?"; return; }
     delq.disabled = true;
-    const { error } = await sb.from("quotes").delete().eq("id", delq.dataset.delq);
+    const id = delq.dataset.delq;
+    const { error } = await sb.from("quotes").delete().eq("id", id);
     if (error) { delq.disabled = false; delq.textContent = "не вышло, ещё раз?"; return; }
-    await loadAll(); route();
+    // Убираем у себя, а не перекачиваем все данные сайта заново
+    state.quotes = state.quotes.filter(q => q.id !== id);
+    state.qr = state.qr.filter(r => r.quote_id !== id);
+    saveCache(); route();
     return;
   }
   const del = e.target.closest("[data-del]");
   if (del) {
     // Удаление в два нажатия, чтобы не стереть случайно
     if (del.textContent !== "Точно удалить?") { del.textContent = "Точно удалить?"; return; }
-    const m = state.media.find(x => x.id === del.dataset.del);
+    const m = state.media.find(x => x.id === del.dataset.del); if (!m) return;
     del.disabled = true;
     // Сначала запись в базе, потом файлы: если удаление не прошло, пост не останется без картинки
     const { error } = await sb.from("media").delete().eq("id", m.id);
     if (error) { del.disabled = false; del.textContent = "Не удалилось, ещё раз?"; return; }
-    await removeFiles(BUCKET, [m.path, thumbPath(m), midPath(m)].filter(Boolean));
-    closeViewer(); await loadAll(); route();
+    removeFiles(BUCKET, [m.path, thumbPath(m), midPath(m)].filter(Boolean));
+    state.media = state.media.filter(x => x.id !== m.id);
+    state.comments = state.comments.filter(c => c.media_id !== m.id);
+    state.mr = state.mr.filter(r => r.media_id !== m.id);
+    saveCache();
+    closeViewer(); route();
+    toast("Удалено");
   }
 });
 document.addEventListener("keydown", e => {
@@ -2392,6 +2683,33 @@ async function uploadOne(file, { tags, caption, takenAt }) {
 // Открыть любую картинку: JPG, PNG, WebP, GIF, AVIF, BMP, HEIC с айфона.
 // Пробуем по очереди: быстрый способ браузера, обычную картинку, а для HEIC — конвертер.
 const isHeic = f => /image\/hei[cf]/i.test(f.type) || /\.hei[cf]$/i.test(f.name || "");
+
+// Дата съёмки, записанная внутри JPEG (EXIF DateTimeOriginal), как «2024-06-13». Нет — null.
+// iPhone отдаёт выбранному из галереи файлу время выбора, а не съёмки, поэтому без этого почти все фото
+// получали дату загрузки и в ленте «по дате события» вставали не на своё место
+async function exifDate(file) {
+  try {
+    if (!/jpe?g/i.test(file.type) && !/\.jpe?g$/i.test(file.name || "")) return null;
+    const v = new DataView(await file.slice(0, 256 * 1024).arrayBuffer());
+    if (v.getUint16(0) !== 0xFFD8) return null;
+    for (let p = 2; p + 10 < v.byteLength;) {
+      const marker = v.getUint16(p), len = v.getUint16(p + 2);
+      if ((marker & 0xFF00) !== 0xFF00 || marker === 0xFFDA) return null;   // дальше уже сама картинка
+      if (marker === 0xFFE1 && v.getUint32(p + 4) === 0x45786966) {          // блок «Exif»
+        const t = p + 10, le = v.getUint16(t) === 0x4949;                     // II — порядок байт Intel, MM — Motorola
+        const u16 = o => v.getUint16(t + o, le), u32 = o => v.getUint32(t + o, le);
+        const find = (ifd, tag) => { const n = u16(ifd); for (let i = 0; i < n; i++) if (u16(ifd + 2 + i * 12) === tag) return ifd + 2 + i * 12; return -1; };
+        const text = e => String.fromCharCode(...new Uint8Array(v.buffer, t + u32(e + 8), 10));
+        const ifd0 = u32(4), sub = find(ifd0, 0x8769);                        // 0x8769 — ссылка на блок с датой съёмки
+        const e = sub >= 0 ? find(u32(sub + 8), 0x9003) : -1;                 // 0x9003 — DateTimeOriginal
+        const d = (e >= 0 ? text(e) : find(ifd0, 0x0132) >= 0 ? text(find(ifd0, 0x0132)) : "").match(/^(\d{4}):(\d{2}):(\d{2})/);
+        return d && d[1] > "1900" ? `${d[1]}-${d[2]}-${d[3]}` : null;
+      }
+      p += 2 + len;
+    }
+  } catch (e) {}
+  return null;
+}
 
 async function decodeImage(file) {
   try { return await createImageBitmap(file, { imageOrientation: "from-image" }); } catch (e) {}
@@ -2569,17 +2887,24 @@ function queueVthumb(m, replace) {
   }).catch(() => {});
 }
 
+const vthumbOk = new Set();   // у этих видео превью уже проверено и нормальное — при каждой перерисовке не проверяем заново
 function fixVideoThumbs() {
   document.querySelectorAll("[data-vthumb]:not([data-vchecked])").forEach(el => {
     el.dataset.vchecked = "1";
     const id = el.dataset.vthumb, m = state.media.find(x => x.id === id); if (!m) return;
     if (vthumbLocal[id]) return applyVthumb(el, vthumbLocal[id]);
+    if (vthumbOk.has(id)) return;
     const t = url(thumbPath(m));
     if (!t) return queueVthumb(m, false);
     // Превью есть — проверяем, не чёрное ли оно (отдельная загрузка с разрешением на чтение пикселей)
     const probe = new Image();
     probe.crossOrigin = "anonymous";
-    probe.onload = () => { if (isBlackCanvas(probe, probe.naturalWidth, probe.naturalHeight)) queueVthumb(m, true); };
+    probe.onload = () => {
+      if (!isBlackCanvas(probe, probe.naturalWidth, probe.naturalHeight)) return vthumbOk.add(id);
+      // Чёрное превью могло остаться в памяти телефона, а хозяин видео его уже исправил — убираем, чтобы взялось свежее
+      window.caches?.open("korefany-pics-v1").then(c => c.delete(`https://pics.korefany/${BUCKET}/${thumbPath(m)}`)).catch(() => {});
+      queueVthumb(m, true);
+    };
     probe.onerror = () => queueVthumb(m, false);
     probe.src = t;
   });
@@ -2600,6 +2925,7 @@ async function route() {
   const seq = ++routeSeq;
   closeViewer(true);
   document.querySelector(".gs-wrap")?.remove();   // шторка «Фильтр и порядок» галереи
+  document.querySelector(".lightbox")?.remove();  // фото из чата на весь экран не остаётся висеть над новой страницей
   clearInterval(coverTimer);   // ушли с ленты — обложка больше не листается
   feedObserver?.disconnect();  // и посты больше не подгружаем
   feedKeeper?.disconnect(); feedKeeper = null;
@@ -2607,8 +2933,10 @@ async function route() {
   await signed(state.profiles.flatMap(x => [x.avatar_path, x.cover_path]).filter(Boolean));
   if (typeof chatLeave === "function") chatLeave();   // вышли из переписки — меню снова видно
   const h = location.hash.replace(/^#/, "") || "/";
+  if (h !== "/") { state.fnew = false; state.fnewList = null; }   // ушёл из ленты — «Новые для тебя» закрываются
   try {
     if (h === "/") await viewFeed();
+    else if (h.startsWith("/new/")) { const [who, last, n] = h.slice(5).split("/"); await viewBatch(who, last, n); }
     else if (h === "/people") await viewPeople();
     else if (h.startsWith("/p/")) await viewPerson(h.slice(3));
     else if (h === "/quotes") viewQuotes();
@@ -2627,7 +2955,7 @@ async function route() {
 }
 
 // Подходит ли страница к текущему адресу (для защиты от устаревших переходов в shell)
-const PAGE_OF = { feed: ["/"], people: ["/people", "/p/"], chats: ["/chats", "/chat/"], quotes: ["/quotes"], top: ["/top"], money: ["/money"], "": ["/me", "/upload"] };
+const PAGE_OF = { feed: ["/", "/new/"],people: ["/people", "/p/"], chats: ["/chats", "/chat/"], quotes: ["/quotes"], top: ["/top"], money: ["/money"], "": ["/me", "/upload"] };
 function pageMatches(active) {
   const h = location.hash.replace(/^#/, "") || "/";
   const list = PAGE_OF[active]; if (!list) return true;
@@ -2804,31 +3132,37 @@ function startPolling() {
 // Вернулся во вкладку — сразу проверяем новое (подписываемся один раз, а не при каждом входе)
 document.addEventListener("visibilitychange", () => { if (!document.hidden && pollTimer) poll(); });
 
-// Проверка новых данных: сравниваем с тем, что уже есть на странице
+// Проверка новых данных: сравниваем с тем, что уже есть на странице.
+// Каждые 15 секунд тянем только новое (комментарии и реакции позже последних известных). Раз в минуту — полная
+// сверка: что удалили. Раньше все реакции перекачивались каждые 15 секунд — при тысячах реакций это сотни мегабайт
+// за вечер с одного открытого сайта (у Supabase на бесплатном тарифе лимит трафика)
+let pollCount = 0;
 async function poll() {
   if (document.hidden || !state.session) return;
-  // Комментарии: целиком тянем только новые, а для поиска удалённых хватает списка id — это в разы меньше данных.
-  // Всё порциями по 1000: если взять только первую тысячу, остальные посчитались бы удалёнными
-  const lastC = state.comments.reduce((a, x) => x.created_at > a ? x.created_at : a, "1970-01-01T00:00:00Z");
-  const [cNew, cIds, r, m, q] = await Promise.all([
-    sb.from("comments").select("*").gte("created_at", lastC).order("created_at"),
-    fetchAll(() => sb.from("comments").select("id").order("created_at")),
-    fetchAll(() => sb.from("media_reactions").select("*").order("created_at")),
-    sb.from("media").select("id, owner, created_at").order("created_at", { ascending: false }).limit(20),
+  const full = pollCount++ % 4 === 0;
+  const newest = list => list.reduce((a, x) => x.created_at > a ? x.created_at : a, "1970-01-01T00:00:00Z");
+  // Порциями по 1000: если взять только первую тысячу, остальные при полной сверке посчитались бы удалёнными
+  const [cNew, cIds, rNew, rAll, m, q] = await Promise.all([
+    sb.from("comments").select("*").gte("created_at", newest(state.comments)).order("created_at"),
+    full ? fetchAll(() => sb.from("comments").select("id").order("created_at")) : null,
+    full ? null : sb.from("media_reactions").select("*").gte("created_at", newest(state.mr)).order("created_at"),
+    full ? fetchAll(() => sb.from("media_reactions").select("media_id, user_id, emoji, created_at").order("created_at")) : null,
+    sb.from("media").select("id, owner, kind, created_at").order("created_at", { ascending: false }).limit(20),
     sb.from("quotes").select("id, added_by, created_at").order("created_at", { ascending: false }).limit(20)
   ]);
   // Удалённые ищем только среди тех, что были до этой проверки: только что пришедшего в списке id может ещё не быть
   const before = state.comments.slice();
   (cNew.data || []).forEach(x => onComment("INSERT", x));   // повторы onComment отсеет сам
-  if (cIds.data) {
+  if (cIds?.data) {
     const alive = new Set(cIds.data.map(x => x.id));
     before.filter(x => !alive.has(x.id)).forEach(x => onComment("DELETE", null, x));
   }
-  if (r.data) {
-    const key = x => `${x.media_id}|${x.user_id}|${x.emoji}`;
-    const fresh = new Set(r.data.map(key)), have = new Set(state.mr.map(key));
+  const key = x => `${x.media_id}|${x.user_id}|${x.emoji}`;
+  const r = rAll || rNew;
+  if (r?.data) {
+    const have = new Set(state.mr.map(key));
     r.data.filter(x => !have.has(key(x))).forEach(x => onReact("INSERT", x));
-    state.mr.filter(x => !fresh.has(key(x))).forEach(x => onReact("DELETE", null, x));
+    if (rAll) { const fresh = new Set(rAll.data.map(key)); state.mr.filter(x => !fresh.has(key(x))).forEach(x => onReact("DELETE", null, x)); }
   }
   (m.data || []).filter(x => !state.media.some(y => y.id === x.id)).forEach(x => onNewStuff("media", x));
   (q.data || []).filter(x => !state.quotes.some(y => y.id === x.id)).forEach(x => onNewStuff("quote", x));
@@ -2950,9 +3284,13 @@ function mediaText(photos, videos) {
 }
 function onNewStuff(kind, row) {
   const who = kind === "media" ? row.owner : row.added_by;
+  if (kind === "media" && !state.media.some(m => m.id === row.id)) mergeNewMediaSoon();
   if (who === me() || announced.has(row.id)) return;
   announced.add(row.id);
-  const open = async () => { await loadAll(); location.hash = kind === "media" ? "#/" : "#/quotes"; route(); };
+  // Нажал на баннер о фото — открывается пачка этого человека, а не вся лента
+  const open = kind === "media"
+    ? async () => { await mergeNewMedia(); location.hash = `#/new/${who}`; route(); }
+    : async () => { await loadAll(); location.hash = "#/quotes"; route(); };
   if (kind !== "media") return notifyBanner({ who, title: nameOf(who), text: "добавил цитату — нажми, чтобы посмотреть", onOpen: open });
   const b = mediaBatch.get(who) || { photos: 0, videos: 0, timer: null };
   row.kind === "video" ? b.videos++ : b.photos++;
@@ -2962,6 +3300,39 @@ function onNewStuff(kind, row) {
     notifyBanner({ who, title: nameOf(who), text: `${mediaText(b.photos, b.videos)} — нажми, чтобы посмотреть`, onOpen: open });
   }, 4000);
   mediaBatch.set(who, b);
+}
+
+// Новые фото приходят по одному (живой канал или проверка раз в 15 секунд). Через 4 секунды после последнего
+// забираем из базы всё, что новее известного, — сразу с отметками, кто на фото, — и тихо добавляем.
+// Кнопка «Смотреть новые фото» и вкладка «Новое» обновляются сами, а лента под рукой не перерисовывается
+let mergeTimer = null, merging = null;
+function mergeNewMediaSoon() { clearTimeout(mergeTimer); mergeTimer = setTimeout(mergeNewMedia, 4000); }
+async function mergeNewMedia() {
+  clearTimeout(mergeTimer);
+  if (merging) return merging.catch(() => {});   // уже забираем — ждём тот же запрос, второй не нужен
+  merging = (async () => {
+    const since = state.media.reduce((a, m) => m.created_at > a ? m.created_at : a, "1970-01-01T00:00:00Z");
+    const { data, error } = await sb.from("media").select("*, media_people(person_id)").gt("created_at", since).order("created_at", { ascending: false });
+    if (error || !data?.length) return;
+    const have = new Set(state.media.map(m => m.id));
+    const fresh = data.filter(x => !have.has(x.id)).map(toMedia);
+    if (!fresh.length) return;
+    state.media = [...fresh, ...state.media];
+    saveCache();
+    paintNewCounts();
+  })();
+  try { await merging; } catch (e) {} finally { merging = null; }
+}
+// Сколько нового — на кнопке над лентой и на вкладках галереи (без перерисовки остальной страницы)
+function paintNewCounts() {
+  const bar = document.getElementById("feedBar");
+  if (bar && !(state.fnew && state.fnewList)) bar.outerHTML = feedBarHtml();
+  const tabs = document.querySelector("#galleryGrid .g-tabs");
+  if (tabs) {
+    const { kind } = galleryView(), f = state.galleryFilter;
+    const base = ofKind(f ? tagged(f) : state.media, kind);
+    tabs.outerHTML = galleryTabsHtml(base.length, base.filter(isNew).length);
+  }
 }
 
 // ---------- Потянул страницу вниз — обновление (на телефоне) ----------

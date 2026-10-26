@@ -1754,3 +1754,77 @@ body.kb-open .pv-sheet { padding-bottom: 8px; }
   /* Мелкие плитки появляются без очереди, иначе 9 в ряд «сыплются» слишком долго */
   #galleryGrid[data-cols="9"] .tile { animation: none; }
 }
+
+/* ---------- Новое для тебя (v129) ---------- */
+/* Лента: синяя кнопка «Смотреть новые фото» и значок порядка */
+.feedbar { display: flex; gap: 8px; margin: 4px 0 6px; }
+.feedbar.only-sort { justify-content: flex-end; }
+.newbtn { flex: 1; min-height: 48px; border: 0; border-radius: 16px; background: linear-gradient(90deg, #2a6cff, #2fb8ff); color: #fff; font: inherit; font-size: 15px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; box-shadow: 0 0 22px rgba(47, 140, 255, .45); transition: box-shadow .2s, transform .1s; }
+.newbtn:hover { box-shadow: 0 0 30px rgba(47, 160, 255, .7); }
+.newbtn:active { transform: scale(.98); }
+.newbtn em { font-style: normal; background: rgba(255, 255, 255, .22); border-radius: 10px; padding: 2px 8px; font-size: 13px; }
+.sortbtn { min-height: 48px; min-width: 48px; padding: 0 13px; border-radius: 16px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); font: inherit; font-size: 13px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; transition: border-color .2s, box-shadow .2s; }
+.sortbtn:hover { border-color: var(--accent-2); box-shadow: var(--glow-2); }
+.sortbtn svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.feedsub { margin: 0 0 6px; font-size: 13px; color: var(--muted); }
+.feedsub b { color: var(--fg); font-weight: 600; }
+/* Режим «Новые для тебя» */
+.newsbar { display: flex; align-items: center; gap: 12px; margin: 4px 0 8px; padding: 10px 12px; border-radius: 14px; background: rgba(47, 140, 255, .12); border: 1px solid rgba(47, 140, 255, .4); color: #cfe3ff; font-size: 14px; }
+.newsbar span { flex: 1; }
+.newsbar b { color: #7fc4ff; }
+.newsbar .link-btn { color: #7fc4ff; font-size: 13px; font-weight: 700; text-decoration: none; }
+.newsbar-x { width: 32px; height: 32px; flex: none; border-radius: 50%; border: 0; background: rgba(255, 255, 255, .08); color: var(--fg); cursor: pointer; font-size: 14px; }
+.feed-more .link-btn, .empty .link-btn { color: var(--accent-2); font-size: inherit; font-weight: 600; }
+/* Метка «Новое» у поста */
+.post-new { margin-left: auto; flex: none; font-size: 11px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; color: #04121f; background: #2fb8ff; padding: 3px 8px; border-radius: 10px; box-shadow: 0 0 12px rgba(47, 184, 255, .5); }
+.post-new + .post-edit { margin-left: 8px; }
+/* Шторка «Что смотреть» */
+.fs-new { display: flex; align-items: center; justify-content: space-between; min-height: 48px; padding: 0 14px; border: 1px solid rgba(47, 140, 255, .45); border-radius: 14px; background: rgba(47, 140, 255, .14); color: #9fd2ff; font: inherit; font-size: 15px; font-weight: 700; cursor: pointer; }
+.fs-new em { font-style: normal; background: #2a6cff; color: #fff; border-radius: 10px; padding: 2px 9px; font-size: 13px; }
+.gs-sort small { margin-left: auto; font-size: 12px; font-weight: 500; color: var(--muted); }
+
+/* Галерея: «Все» и «Новое» */
+.g-tabs { display: flex; gap: 8px; margin-bottom: 12px; }
+.g-tab { min-height: 38px; padding: 0 14px; border-radius: 19px; border: 1px solid var(--line); background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 7px; cursor: pointer; transition: border-color .2s, box-shadow .2s, color .2s, background .2s; }
+.g-tab:hover { color: var(--fg); }
+.g-tab[aria-selected="true"] { color: #fff; border-color: var(--accent); background: rgba(255, 79, 216, .15); box-shadow: 0 0 14px rgba(255, 79, 216, .35); }
+.g-tab i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+.new-bar { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 14px; background: rgba(62, 230, 255, .07); border: 1px solid rgba(62, 230, 255, .22); color: #bfeff7; font-size: 13px; }
+.new-bar span { flex: 1; }
+.new-bar .link-btn { color: var(--accent-2); font-size: 13px; font-weight: 700; text-decoration: none; }
+.new-who { display: flex; align-items: center; gap: 10px; padding: 16px 0 10px; color: var(--fg); text-decoration: none; }
+.new-who .ava { width: 30px; height: 30px; font-size: 13px; box-shadow: 0 0 0 2px var(--uc, var(--accent)); }
+.new-who b { font-size: 15px; }
+.new-who span { font-size: 13px; color: var(--muted); }
+/* Розовая точка на новом фото в сетке */
+.tile.is-new::before { content: ""; position: absolute; left: 7px; top: 7px; z-index: 2; width: 10px; height: 10px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 8px var(--accent); border: 2px solid var(--bg); }
+
+/* Пачка одного человека (#/new/...) */
+.batch { max-width: 720px; margin: 0 auto; }
+.batch-head { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.batch-back { width: 40px; height: 40px; flex: none; display: grid; place-items: center; border-radius: 50%; color: var(--fg); font-size: 30px; line-height: 1; text-decoration: none; }
+.batch-back:hover { background: rgba(255, 255, 255, .06); }
+.batch-ava .ava { width: 42px; height: 42px; box-shadow: 0 0 0 2px var(--uc, var(--accent)), 0 0 14px var(--uc, var(--accent)); }
+.batch-head h1 { margin: 0; font-size: 20px; }
+.batch-head span { font-size: 13px; color: var(--muted); }
+.batch-hero { position: relative; display: block; width: 100%; padding: 0; border: 0; border-radius: 18px 18px 0 0; overflow: hidden; background: var(--panel-2); cursor: pointer; }
+.batch-hero img { display: block; width: 100%; max-height: min(70vh, 640px); object-fit: cover; }
+.batch-hero .noimg { display: grid; place-items: center; aspect-ratio: 4 / 3; color: var(--muted); font-size: 32px; }
+.batch-hero .play { position: absolute; right: 10px; top: 10px; background: rgba(0, 0, 0, .6); border-radius: 999px; padding: 3px 10px; font-size: 13px; font-weight: 700; color: var(--accent-2); }
+.batch-cap { position: absolute; left: 10px; bottom: 10px; max-width: calc(100% - 20px); background: rgba(0, 0, 0, .55); padding: 5px 10px; border-radius: 10px; font-size: 13px; font-weight: 600; color: #fff; text-align: left; }
+.batch .grid.sq { margin-top: 3px; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px; }
+.batch .grid.sq .tile { border-radius: 0; }
+.batch .tile.is-new::before { display: none; }   /* в пачке новое всё, точки лишние */
+.batch-btns { display: flex; gap: 10px; margin-top: 16px; }
+.batch-btns .btn { min-height: 48px; display: flex; align-items: center; justify-content: center; text-decoration: none; }
+.batch-btns .btn.primary { flex: 1; }
+.batch-more { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 10px 12px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); color: var(--muted); font-size: 14px; text-decoration: none; }
+.batch-more span { flex: 1; }
+.batch-more b { color: var(--fg); }
+.batch-more em { font-style: normal; color: var(--accent-2); font-weight: 700; }
+/* На компьютере кнопка «новые фото» и порядок — под обложкой, по ширине колонки постов (а не на весь экран) */
+@media (min-width: 701px) {
+  .feed-top, .newsbar { width: 100%; max-width: 560px; margin-inline: auto; }
+}
+/* Видео в пачке, у которого ещё нет превью: мерцающая заготовка, пока сайт делает кадр */
+.batch-hero img.vthumb:not([src]) { aspect-ratio: 4 / 3; background: linear-gradient(100deg, var(--panel-2) 30%, #2a2340 50%, var(--panel-2) 70%); background-size: 250% 100%; animation: shimmer 1.4s linear infinite; }

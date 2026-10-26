@@ -133,7 +133,9 @@ self.addEventListener("notificationclick", (e) => {
       if ("focus" in w) {
         try {
           await w.focus();
-          if ("navigate" in w) await w.navigate(url);
+          // Браузер не умеет переводить окно сам (бывает на iPhone) — просим сайт перейти по адресу
+          if ("navigate" in w) { try { await w.navigate(url); return; } catch (err) {} }
+          w.postMessage({ type: "open", url });
           return;
         } catch (err) { /* окно не даёт перейти — откроем новое ниже */ }
       }

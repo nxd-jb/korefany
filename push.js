@@ -8,6 +8,14 @@ const secureSite = location.protocol === "https:" || location.hostname === "loca
 
 if ("serviceWorker" in navigator && secureSite) {
   navigator.serviceWorker.register("sw.js").catch(() => {});
+  // Нажали на уведомление, а сайт уже открыт: помощник просит перейти на нужную страницу (чат, новые фото)
+  navigator.serviceWorker.addEventListener("message", (e) => {
+    if (e.data?.type !== "open") return;
+    let hash = "";
+    try { hash = new URL(e.data.url).hash; } catch (err) {}
+    if (!hash) return;
+    if (location.hash !== hash) location.hash = hash; else if (typeof route === "function") route();
+  });
 }
 
 function b64ToBytes(s) {
