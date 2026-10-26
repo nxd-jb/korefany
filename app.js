@@ -62,6 +62,10 @@ if (window.visualViewport) {
   };
   visualViewport.addEventListener("resize", setVvh);
   visualViewport.addEventListener("scroll", setVvh);
+  window.addEventListener("resize", setVvh);
+  // iPhone прячет клавиатуру с анимацией и иногда сообщает размер экрана раньше, чем она доехала.
+  // Тогда шторка комментариев оставалась короткой и «висела» посреди экрана — пересчитываем ещё пару раз
+  document.addEventListener("focusout", () => { [80, 350, 700].forEach(t => setTimeout(setVvh, t)); });
   setVvh();
 }
 
@@ -686,6 +690,15 @@ document.addEventListener("load", e => {
   const el = e.target;
   if (el.dataset?.sleep) return;   // это заглушка уснувшего поста, а не фото
   if (el.classList?.contains("fade")) el.classList.add("loaded");
+  // Чёткое фото в посте проявилось — размытое превью под ним больше не нужно. Убираем его: на iPhone каждое
+  // такое превью держало в памяти ещё одну картинку и размытый слой, и от этого лента падала из-за нехватки памяти
+  if (el.classList?.contains("full") && el.classList.contains("fade")) {
+    const box = el.closest(".post-media"), ph = box?.querySelector("img.ph");
+    if (ph) setTimeout(() => {
+      if (!el.isConnected || el.dataset.sleep || !el.complete || !el.naturalWidth) return;
+      box.classList.add("solid"); ph.remove();
+    }, 450);
+  }
   if (el.tagName === "IMG" && !el.classList.contains("fade")) {
     const id = el.closest("[data-post-media]")?.dataset.postMedia;
     if (id) rememberSize(id, el.naturalWidth, el.naturalHeight);
@@ -703,7 +716,7 @@ const BLANK = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAA
 let feedKeeper = null;
 function keepNear(root) {
   feedKeeper ??= new IntersectionObserver(es => es.forEach(e => e.isIntersecting ? wakeMedia(e.target) : sleepMedia(e.target)),
-    { rootMargin: "2000px 0px" });   // примерно три экрана телефона вверх и вниз остаются живыми
+    { rootMargin: "1200px 0px" });   // полтора экрана телефона вверх и вниз: проснуться фото успевают, а в памяти их вдвое меньше
   root.querySelectorAll("[data-post-media]:not([data-kept])").forEach(el => { el.dataset.kept = "1"; feedKeeper.observe(el); });
 }
 function sleepMedia(box) {
@@ -777,7 +790,7 @@ function postMediaClick(el, e) {
 // Обложка ленты: случайные фото сменяют друг друга, плюс счётчики.
 // Каждое фото видно целиком, а по бокам — его же размытая копия, чтобы ничего не обрезалось
 const COVER_COUNT = 12, COVER_EVERY = 5000;
-let coverTimer = null;
+let coverTimer = null, coverSeen = null;
 
 async function coverHtml() {
   const photos = state.media.filter(m => m.kind === "photo");
@@ -790,10 +803,14 @@ async function coverHtml() {
   const days = Math.max(1, Math.floor((Date.now() - first) / 864e5));
   const stat = (n, forms) => `<div><b data-count="${n}">${n}</b><span>${plural(n, forms)}</span></div>`;
   return `<section class="cover" id="cover">
-    ${slides.map((m, i) => `<div class="cover-slide${i === 0 ? " on" : ""}" data-cover-open="${m.id}">
-      <img class="cs-bg" src="${url(thumbPath(m)) || url(m.path)}" alt="">
-      <img class="cs-fg fade" ${i < 2 ? "src" : "data-src"}="${url(midPath(m)) || url(m.path)}" alt="" decoding="async">
-    </div>`).join("")}
+    <div class="cover-stage">${slides.map((m, i) => {
+      // Сразу грузим только первое фото и соседей (второе и последнее), остальные — когда до них дойдёт очередь
+      const now = i < 2 || i === slides.length - 1 ? "src" : "data-src";
+      return `<div class="cover-slide${i === 0 ? " on" : ""}" data-cover-open="${m.id}">
+      <img class="cs-bg" ${now}="${url(thumbPath(m)) || url(m.path)}" alt="" decoding="async">
+      <img class="cs-fg fade" ${now}="${url(midPath(m)) || url(m.path)}" alt="" decoding="async">
+    </div>`;
+    }).join("")}</div>
     ${slides.length > 1 ? `<div class="cover-dots">${slides.map((_, i) => `<i class="${i === 0 ? "on" : ""}"></i>`).join("")}</div>` : ""}
     <div class="cover-in">
       <p class="cover-kicker">${dates.length ? "История с " + dayText(first) : "История начинается"}</p>
@@ -816,25 +833,45 @@ function startCover() {
   const dots = [...cover.querySelectorAll(".cover-dots i")];
   if (slides.length < 2) return;
   let cur = 0;
-  // Большие фото обложки грузятся по очереди: текущее и следующее, а не все 12 сразу при открытии ленты
-  const load = i => { const img = slides[(i + slides.length) % slides.length].querySelector("img[data-src]"); if (img) { img.src = img.dataset.src; img.removeAttribute("data-src"); } };
+  // В памяти держим только текущее фото обложки и двух соседей. Раньше за пару минут подгружались все 12 больших фото
+  // и так и оставались в памяти, даже когда ты далеко внизу ленты, — iPhone от этого перезагружал сайт
+  const at = i => slides[(i + slides.length) % slides.length];
+  const load = i => at(i).querySelectorAll("img[data-src]").forEach(img => { img.src = img.dataset.src; img.removeAttribute("data-src"); });
+  const unload = s => s.querySelectorAll("img[src]").forEach(img => { img.dataset.src = img.getAttribute("src"); img.removeAttribute("src"); });
+  const near = s => [-1, 0, 1].some(d => at(cur + d) === s);
+  const tidy = () => slides.forEach(s => { if (!near(s) && !s.classList.contains("leaving")) unload(s); });
   const go = (n, dir) => {
     n = (n + slides.length) % slides.length;
     if (n === cur) return;
     load(n); load(n + 1); load(n - 1);
     const out = slides[cur], inn = slides[n];
-    // Новое фото ставим сбоку без анимации, потом плавно заезжает, а старое уезжает в другую сторону
+    // Новое фото ставим сбоку без анимации, потом плавно заезжает, а старое уезжает в другую сторону.
+    // Уезжающий слайд рисуется, пока едет (.leaving), потом перестаёт — рисуются только видимые
+    clearTimeout(inn.leaveTimer); inn.classList.remove("leaving");
     inn.style.transition = "none"; inn.style.transform = `translateX(${dir * 100}%)`;
     void inn.offsetWidth;
     inn.style.transition = ""; inn.style.transform = "";
     inn.classList.add("on");
-    out.classList.remove("on"); out.style.transform = `translateX(${-dir * 100}%)`;
+    out.classList.remove("on"); out.classList.add("leaving"); out.style.transform = `translateX(${-dir * 100}%)`;
+    clearTimeout(out.leaveTimer); out.leaveTimer = setTimeout(() => { out.classList.remove("leaving"); tidy(); }, 950);
     dots[cur]?.classList.remove("on"); dots[n]?.classList.add("on");
     cur = n;
   };
+  // Обложку не видно (долистал вниз) — фото на ней не листаются. А когда она дальше полутора экранов,
+  // её фото выгружаются совсем и возвращаются заранее, ещё до того, как ты до неё долистаешь обратно
+  const inView = () => { const r = cover.getBoundingClientRect(); return r.bottom > -200 && r.top < innerHeight + 200; };
+  coverSeen?.disconnect();
+  coverSeen = window.IntersectionObserver ? new IntersectionObserver(es => {
+    if (es[0].isIntersecting) { load(cur); load(cur + 1); load(cur - 1); }
+    else slides.forEach(unload);
+  }, { rootMargin: "1500px 0px" }) : null;
+  coverSeen?.observe(cover);
   const restart = () => {
     clearInterval(coverTimer);
-    coverTimer = setInterval(() => { if (!document.hidden && document.body.contains(cover)) go(cur + 1, 1); else if (!document.body.contains(cover)) clearInterval(coverTimer); }, COVER_EVERY);
+    coverTimer = setInterval(() => {
+      if (!document.body.contains(cover)) { clearInterval(coverTimer); coverSeen?.disconnect(); return; }
+      if (!document.hidden && inView()) go(cur + 1, 1);
+    }, COVER_EVERY);
   };
   let sx = 0, sy = 0;
   cover.addEventListener("touchstart", e => { sx = e.touches[0].clientX; sy = e.touches[0].clientY; }, { passive: true });
@@ -1092,12 +1129,13 @@ function openGallerySheet() {
     <div class="gs-sheet" role="dialog" aria-label="Фильтр и порядок"><div class="pv-grab" data-gs-close></div><div id="gsBody"></div></div>`;
   document.body.appendChild(w);
   paintGallerySheet();
+  wireSheetDrag(w, w.querySelector(".gs-sheet"), closeGallerySheet);
   void w.offsetWidth; w.classList.add("open");
   w.querySelector(".gs-kind[aria-pressed=true]")?.focus({ preventScroll: true });
 }
 function closeGallerySheet() {
   const w = document.querySelector(".gs-wrap"); if (!w) return;
-  w.classList.remove("open"); setTimeout(() => w.remove(), 280);
+  w.classList.remove("open"); setTimeout(() => w.remove(), 320);
 }
 function paintGallerySheet() {
   const body = document.getElementById("gsBody"); if (!body) return;
@@ -1142,6 +1180,7 @@ function openFeedSheet() {
         `<button type="button" class="gs-sort" role="radio" data-fs-sort="${s}" aria-checked="${sort === s}"><i></i>${label}${hint ? `<small>${hint}</small>` : ""}</button>`).join("")}</div>
     </div>`;
   document.body.appendChild(w);
+  wireSheetDrag(w, w.querySelector(".gs-sheet"), closeGallerySheet);
   void w.offsetWidth; w.classList.add("open");
   w.querySelector(".gs-sort[aria-checked=true]")?.focus({ preventScroll: true });
 }
@@ -2239,21 +2278,93 @@ async function openPhoneViewer(list, idx, fromEl = null) {
   if (fresh && !history.state?.viewer) history.pushState({ viewer: true }, "");
   wireComments(el, m);
   wirePhoneViewer(el, list, idx);
+  wireSheetDrag(el.querySelector(".pv-sheet-wrap"), el.querySelector(".pv-sheet"), closePvSheet);
   if (fromEl && m.kind === "photo") flyIn(fromEl, el);
 }
 
 function openPvSheet() {
   const w = document.querySelector(".viewer .pv-sheet-wrap"); if (!w) return false;
+  clearSheetDrag(w);
   w.hidden = false;
   void w.offsetWidth;   // сначала шторка появляется внизу, потом выезжает
   w.classList.add("open");
   return true;
 }
 function closePvSheet() {
-  const w = document.querySelector(".viewer .pv-sheet-wrap"); if (!w || w.hidden) return;
+  const w = document.querySelector(".viewer .pv-sheet-wrap"); if (!w || w.hidden || !w.classList.contains("open")) return;
   w.classList.remove("open");
   document.activeElement?.blur?.();
-  setTimeout(() => { w.hidden = true; }, 280);
+  setTimeout(() => { if (!w.classList.contains("open")) { w.hidden = true; clearSheetDrag(w); } }, 400);
+}
+
+// ---------- Шторки снизу: стянуть пальцем ----------
+// Комментарии, «Что смотреть», «Изменить фото», «Участники». На телефоне шторку тянут вниз за полоску сверху,
+// за заголовок или за любое место, если список внутри уже прокручен до верха. Шторка едет за пальцем,
+// фон под ней светлеет. Отпустил ниже трети или смахнул быстро — закрылась, иначе мягко вернулась.
+// Страница под шторкой при этом не двигается (раньше палец тянул её, и окно «улетало» вверх)
+function wireSheetDrag(wrap, sheet, close) {
+  if (!wrap || !sheet || wrap.dataset.drag) return;
+  wrap.dataset.drag = "1";
+  const dim = wrap.querySelector(".pv-dim");
+  let y0 = 0, dy = 0, mode = null, scroller = null, lastY = 0, lastT = 0, speed = 0;
+  wrap.addEventListener("touchstart", e => {
+    if (e.touches.length !== 1 || !PHONE.matches) { mode = "off"; return; }
+    y0 = lastY = e.touches[0].clientY; lastT = performance.now(); dy = 0; speed = 0; mode = null;
+    // Поле ввода не трогаем: в нём свой текст и своя прокрутка
+    if (e.target.closest("textarea, input, select")) { mode = "off"; return; }
+    // Ближайший прокручиваемый список внутри шторки (комментарии или сама шторка, если она длинная)
+    scroller = null;
+    for (let el = e.target; el && el !== wrap; el = el.parentElement) {
+      if (el.scrollHeight > el.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(el).overflowY)) { scroller = el; break; }
+    }
+  }, { passive: true });
+  wrap.addEventListener("touchmove", e => {
+    if (mode === "off" || e.touches.length !== 1) return;
+    const y = e.touches[0].clientY, d = y - y0;
+    if (!mode) {
+      if (Math.abs(d) < 6) { if (!scroller) e.preventDefault(); return; }
+      // Тянем шторку вниз, если тянут вниз и список (если он есть) уже в самом верху. Иначе — обычная прокрутка списка
+      mode = d > 0 && (!scroller || scroller.scrollTop <= 0) ? "drag" : scroller ? "off" : "hold";
+      if (mode === "drag") { sheet.style.transition = "none"; if (dim) dim.style.transition = "none"; }
+    }
+    if (mode === "hold") { e.preventDefault(); return; }   // тянут вверх за полоску — страница под шторкой не едет
+    if (mode !== "drag") return;
+    e.preventDefault();
+    const now = performance.now();
+    speed = (y - lastY) / Math.max(1, now - lastT); lastY = y; lastT = now;
+    // Вверх шторка тянется туго, вниз — ровно за пальцем
+    dy = d > 0 ? d : -Math.min(24, -d * .2);
+    sheet.style.transform = `translateY(${dy}px)`;
+    if (dim) dim.style.opacity = String(Math.max(0, 1 - Math.max(0, dy) / (sheet.offsetHeight || 1)));
+  }, { passive: false });
+  const end = () => {
+    if (mode !== "drag") { mode = null; return; }
+    mode = null;
+    const h = sheet.offsetHeight || 1;
+    const shut = dy > h * .3 || (speed > .45 && dy > 24);
+    // Отпустил: шторка доезжает сама. Чем быстрее смахнул, тем короче доводка
+    const t = shut ? Math.max(.16, Math.min(.32, (h - dy) / Math.max(1.2, speed * 1000) )) : .34;
+    sheet.style.transition = `transform ${t}s cubic-bezier(.32, .72, 0, 1)`;
+    if (dim) dim.style.transition = `opacity ${t}s ease`;
+    if (shut) {
+      sheet.style.transform = "translateY(100%)";
+      if (dim) dim.style.opacity = "0";
+      navigator.vibrate?.(6);
+      close();
+    } else {
+      sheet.style.transform = "";
+      if (dim) dim.style.opacity = "";
+      setTimeout(() => { if (!mode) clearSheetDrag(wrap, true); }, t * 1000 + 30);
+    }
+  };
+  wrap.addEventListener("touchend", end);
+  wrap.addEventListener("touchcancel", end);
+}
+// Убрать следы перетаскивания (при следующем открытии шторка выезжает как обычно)
+function clearSheetDrag(wrap, keepPlace = false) {
+  wrap?.querySelectorAll(".pv-sheet, .gs-sheet, .me-sheet, .mem-sheet, .pv-dim").forEach(el => {
+    el.style.transition = ""; if (!keepPlace) { el.style.transform = ""; el.style.opacity = ""; }
+  });
 }
 document.addEventListener("click", e => {
   if (e.target.closest("[data-pv-comments]")) openPvSheet();
@@ -2400,7 +2511,8 @@ function openMediaEditor(id) {
   document.body.appendChild(w);
   void w.offsetWidth; w.classList.add("open");
   if (own) autoGrow(w.querySelector("#eCap"));
-  const close = () => { w.classList.remove("open"); setTimeout(() => w.remove(), 280); };
+  const close = () => { w.classList.remove("open"); setTimeout(() => w.remove(), 320); };
+  wireSheetDrag(w, w.querySelector(".me-sheet"), close);
   w.querySelectorAll("[data-me-close]").forEach(b => b.onclick = close);
   w.querySelectorAll("[data-et]").forEach(b => b.onclick = () => b.setAttribute("aria-pressed", b.getAttribute("aria-pressed") !== "true"));
   w.querySelector("#mediaEdit").onsubmit = async e => {
@@ -3258,6 +3370,8 @@ function countUp(root = document) {
 let parallaxOn = false;
 function wireParallax() {
   if (parallaxOn || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  // Браузер умеет анимацию от прокрутки — параллакс сделан в style.css и идёт без скрипта, плавнее
+  if (window.CSS?.supports?.("animation-timeline: view()")) return;
   parallaxOn = true;
   let queued = false;
   addEventListener("scroll", () => {

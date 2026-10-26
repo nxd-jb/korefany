@@ -1552,6 +1552,7 @@ async function openMembers() {
   w.className = "mem-wrap";
   w.innerHTML = `<div class="pv-dim" data-mem-close></div><div class="mem-sheet" role="dialog" aria-label="Участники">${membersHtml(c)}</div>`;
   document.body.appendChild(w);
+  wireSheetDrag(w, w.querySelector(".mem-sheet"), () => closeMembers());
   void w.offsetWidth; w.classList.add("open");
   // Свежие «был(а) …»: профили в памяти могли устареть
   const { data } = await sb.from("profiles").select("id, last_seen");
@@ -1565,7 +1566,7 @@ function paintMembers() {
 function closeMembers(now = false) {
   const w = document.querySelector(".mem-wrap"); if (!w) return;
   if (now) return w.remove();
-  w.classList.remove("open"); setTimeout(() => w.remove(), 280);
+  w.classList.remove("open"); setTimeout(() => w.remove(), 320);
 }
 
 // «Я тут»: пока сайт открыт, раз в минуту отмечаем время — по нему другие видят «был(а) 5 мин назад»

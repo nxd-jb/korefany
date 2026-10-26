@@ -213,6 +213,8 @@ img.fade.loaded { opacity: 1; filter: none; }
 /* Чёткое фото поверх превью проступает только прозрачностью: анимация размытия большой картинки на iPhone тормозит прокрутку */
 .post-media img.full.fade { filter: none; transition: opacity .35s ease; }
 .post-media img { height: auto; }
+/* Превью уже убрано (app.js, когда чёткое фото загрузилось) — теперь размер задаёт само фото */
+.post-media.solid img.full.fade { position: static; height: auto; max-height: 720px; }
 .tile .noimg { display: grid; place-items: center; aspect-ratio: 4 / 3; color: var(--muted); font-size: 28px; }
 .tile .rc { position: absolute; left: 8px; bottom: 8px; background: rgba(0, 0, 0, .6); border-radius: 999px; padding: 2px 8px; font-size: 12px; font-weight: 700; }
 /* Обложка ленты */
@@ -1034,7 +1036,7 @@ body.viewer-open { overflow: hidden; }
 @media (max-width: 700px) {
   .feed { gap: 16px; }
   .post { border-radius: 14px; }
-  .post-media img { max-height: 560px; }
+  .post-media img, .post-media.solid img.full.fade { max-height: 560px; }
 }
 
 /* ---------- Галерея ---------- */
@@ -1615,10 +1617,30 @@ body.kb-open .pv-sheet { padding-bottom: 8px; }
 }
 @keyframes post-reveal { from { opacity: 0; transform: translateY(46px) scale(.95); } }
 
-/* Параллакс обложки: --px от 0 до 1 ставит app.js при прокрутке */
-.cover-slide { translate: 0 calc(var(--px, 0) * 38%); }
+/* Параллакс обложки: --px от 0 до 1 ставит app.js при прокрутке.
+   Сдвигается один слой со всеми слайдами (.cover-stage), и он отдельный слой видеокарты: размытый фон
+   рисуется один раз, а не перерисовывается на каждом кадре прокрутки (раньше из-за этого обложка «тупила»
+   и при прокрутке вверх какое-то время была пустой) */
+.cover-stage { position: absolute; inset: 0; transform: translate3d(0, calc(var(--px, 0) * 38%), 0); will-change: transform; }
 .cover::before { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: #0b0912; opacity: calc(var(--px, 0) * .7); }
-.cover-in { opacity: calc(1 - var(--px, 0) * 1.4); translate: 0 calc(var(--px, 0) * -40px); }
+.cover-in { opacity: calc(1 - var(--px, 0) * 1.4); translate: 0 calc(var(--px, 0) * -40px); will-change: opacity, translate; }
+/* Рисуются только текущий слайд и тот, что уезжает. Остальные 10 не рисуются вовсе — с их размытыми копиями
+   телефон не успевал перерисовать обложку, когда к ней возвращаешься */
+.cover-slide:not(.on):not(.leaving) { visibility: hidden; }
+/* Где браузер умеет анимации от прокрутки (iPhone с iOS 26, Chrome), параллакс считает он сам, ровно в такт пальцу.
+   Скрипт тогда не нужен: раньше на iPhone он не успевал за быстрой прокруткой, и, вернувшись к обложке,
+   ты какое-то время видел её тёмной и без надписи */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .cover { view-timeline: --cover block; }
+    .cover-stage { transform: none; animation: cover-stage linear both; animation-timeline: --cover; animation-range: exit 0% exit 100%; }
+    .cover::before { opacity: 0; animation: cover-shade linear both; animation-timeline: --cover; animation-range: exit 0% exit 100%; }
+    .cover-in { opacity: 1; translate: none; animation: cover-text linear both; animation-timeline: --cover; animation-range: exit 0% exit 72%; }
+  }
+}
+@keyframes cover-stage { from { transform: translate3d(0, 0, 0); } to { transform: translate3d(0, 38%, 0); } }
+@keyframes cover-shade { from { opacity: 0; } to { opacity: .7; } }
+@keyframes cover-text { from { opacity: 1; translate: 0 0; } to { opacity: 0; translate: 0 -29px; } }
 
 /* Живая реакция друга: эмодзи с именем всплывает над кнопкой и улетает */
 .live-react { position: fixed; z-index: 90; pointer-events: none; display: grid; justify-items: center; gap: 2px; transform: translate(-50%, 0); animation: live-up 2.1s cubic-bezier(.2, .8, .3, 1) forwards; }
@@ -1828,3 +1850,22 @@ body.kb-open .pv-sheet { padding-bottom: 8px; }
 }
 /* Видео в пачке, у которого ещё нет превью: мерцающая заготовка, пока сайт делает кадр */
 .batch-hero img.vthumb:not([src]) { aspect-ratio: 4 / 3; background: linear-gradient(100deg, var(--panel-2) 30%, #2a2340 50%, var(--panel-2) 70%); background-size: 250% 100%; animation: shimmer 1.4s linear infinite; }
+
+/* ---------- Шторки на телефоне: плавнее (v130) ---------- */
+/* Пока открыт просмотр фото, страница под ним не двигается и не «пружинит» даже на iPhone */
+html:has(body.viewer-open), body.viewer-open { overflow: hidden; overscroll-behavior: none; }
+@media (max-width: 700px) {
+  /* Выезд и уход — по кривой, как у шторок iPhone: быстро трогается и мягко доезжает */
+  .pv-sheet, .gs-sheet, .me-sheet, .mem-sheet { transition: transform .42s cubic-bezier(.32, .72, 0, 1); will-change: transform; }
+  .pv-dim { transition: opacity .42s ease; }
+  /* Полоска сверху шире по зоне касания — за неё удобно хвататься пальцем */
+  .pv-grab { height: 28px; margin: 0 -16px; touch-action: none; }
+  .pv-grab::before { width: 44px; transition: background .2s, width .2s; }
+  .pv-grab:active::before { width: 52px; background: rgba(255, 255, 255, .45); }
+  /* Пока клавиатуры нет (ни одно поле не в фокусе), шторка просто во весь экран и прижата к низу. Раньше она бралась
+     из размеров «видимой части экрана», а iPhone после закрытия клавиатуры иногда сообщал их с опозданием —
+     и шторка оставалась короткой, висела посреди экрана */
+  .pv-sheet-wrap:not(:has(textarea:focus, input:focus)), .me-wrap:not(:has(textarea:focus, input:focus)),
+  .gs-wrap, .mem-wrap { top: 0; bottom: 0; height: auto; }
+  .pv-sheet .c-list { -webkit-overflow-scrolling: touch; }
+}
