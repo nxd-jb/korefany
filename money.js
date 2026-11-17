@@ -35,7 +35,9 @@ function tripBalances(tripId) {
   money.items.filter(x => x.trip_id === tripId).forEach(x => {
     const total = cents(x.amount), n = x.shares.length, part = Math.floor(total / n);
     add(x.payer, total);
-    x.shares.forEach((u, k) => add(u, -(part + (k < total - part * n ? 1 : 0))));
+    // Неравные доли (22_v132.sql): у каждого своя сумма. Иначе поровну
+    if (Array.isArray(x.parts) && x.parts.length === n) x.shares.forEach((u, k) => add(u, -cents(x.parts[k])));
+    else x.shares.forEach((u, k) => add(u, -(part + (k < total - part * n ? 1 : 0))));
   });
   // Вернул долг: отдавший «доплатил», получивший «получил своё»
   money.paid.filter(x => x.trip_id === tripId).forEach(x => { add(x.from_user, cents(x.amount)); add(x.to_user, -cents(x.amount)); });
@@ -118,22 +120,112 @@ async function viewMoney() {
 // Одна трата в форме — отдельный блок со своим всем: сколько, за что, кто платил и на кого делим.
 // Пример: домик 25 000 ₽ снял Костя — делим на всех; продукты 5 000 ₽ купил Влад — делим на Влада, Костю и Мишу.
 // «+» справа от «За что» добавляет новый блок, «✕» у второго и следующих — убирает
-function moEntry(trip, n) {
+function moEntry(trip, n, item = null) {
   const people = state.profiles.map(p => p.id);
+  const payer = item ? item.payer : me(), shares = item ? item.shares : trip.members;
+  const uneven = !!(item && Array.isArray(item.parts) && item.parts.length === item.shares.length);
   return `<div class="mo-entry" data-mo-entry>
     ${n > 1 ? `<div class="mo-entry-head"><b>Трата ${n}</b><button type="button" class="link-btn" data-mo-entry-del aria-label="Убрать эту трату">✕ убрать</button></div>` : ""}
     <div class="mo-add-row">
-      <label>Сколько<input type="text" class="mo-amount" inputmode="decimal" placeholder="25000" autocomplete="off"></label>
-      <label>За что<input type="text" class="mo-what" maxlength="80" placeholder="${n > 1 ? "Продукты, бензин..." : "Домик, шашлык..."}"></label>
-      <button type="button" class="mo-row-btn add" data-mo-entry-add aria-label="Добавить ещё трату" title="Ещё трата (свой плательщик и свои участники)">+</button>
+      <label>Сколько<input type="text" class="mo-amount" inputmode="decimal" placeholder="25000" autocomplete="off" value="${item ? String(item.amount).replace(".", ",") : ""}"></label>
+      <label>За что<input type="text" class="mo-what" maxlength="80" placeholder="${n > 1 ? "Продукты, бензин..." : "Домик, шашлык..."}" value="${esc(item?.title || "")}"></label>
+      ${item ? "" : `<button type="button" class="mo-row-btn add" data-mo-entry-add aria-label="Добавить ещё трату" title="Ещё трата (свой плательщик и свои участники)">+</button>`}
     </div>
     <label>Кто платил
-      <div class="chips">${people.map(pid => `<button type="button" class="chip" data-mo-payer="${pid}" aria-pressed="${pid === me()}">${avatar(pid)}${esc(nameOf(pid))}</button>`).join("")}</div>
+      <div class="chips">${people.map(pid => `<button type="button" class="chip" data-mo-payer="${pid}" aria-pressed="${pid === payer}">${avatar(pid)}${esc(nameOf(pid))}</button>`).join("")}</div>
     </label>
-    <label>На кого делим поровну
-      <div class="chips">${people.map(pid => `<button type="button" class="chip" data-mo-share="${pid}" aria-pressed="${trip.members.includes(pid)}">${avatar(pid)}${esc(nameOf(pid))}</button>`).join("")}</div>
+    <label>На кого делим
+      <div class="chips">${people.map(pid => `<button type="button" class="chip" data-mo-share="${pid}" aria-pressed="${shares.includes(pid)}">${avatar(pid)}${esc(nameOf(pid))}</button>`).join("")}</div>
     </label>
+    ${state.v132 ? `<div class="row mo-split"><button type="button" class="tab" data-mo-split="even" aria-pressed="${!uneven}">Поровну</button>
+      <button type="button" class="tab" data-mo-split="parts" aria-pressed="${uneven}">У каждого своя сумма</button></div>
+    <div class="mo-parts" ${uneven ? "" : "hidden"}>${people.map(pid => {
+      const k = item ? item.shares.indexOf(pid) : -1;
+      return `<label class="mo-part" data-mo-part="${pid}" ${shares.includes(pid) ? "" : "hidden"}>${avatar(pid)}<span>${esc(nameOf(pid))}</span>
+        <input type="text" inputmode="decimal" placeholder="0" value="${uneven && k >= 0 ? String(item.parts[k]).replace(".", ",") : ""}"></label>`;
+    }).join("")}<p class="msg mo-parts-sum"></p></div>` : ""}
   </div>`;
+}
+const moNum = v => Math.round(parseFloat(String(v || "0").replace(/\s/g, "").replace(",", ".")) * 100) / 100 || 0;
+// Сумма долей должна сойтись с суммой траты — показываем, сколько ещё не распределено
+function paintParts(entry) {
+  const box = entry.querySelector(".mo-parts"); if (!box) return;
+  const shares = [...entry.querySelectorAll('[data-mo-share][aria-pressed="true"]')].map(x => x.dataset.moShare);
+  box.querySelectorAll("[data-mo-part]").forEach(l => { l.hidden = !shares.includes(l.dataset.moPart); });
+  const total = cents(moNum(entry.querySelector(".mo-amount").value));
+  const sum = shares.reduce((a, u) => a + cents(moNum(box.querySelector(`[data-mo-part="${u}"] input`).value)), 0);
+  const left = total - sum;
+  box.querySelector(".mo-parts-sum").textContent = !total ? "" : left === 0 ? "Всё распределено ✓" : left > 0 ? `Осталось распределить ${rub(left)}` : `Лишние ${rub(-left)}`;
+}
+// Прочитать одну трату из формы. Пустой блок — null, ошибка — { error }
+function readEntry(b, i) {
+  const r = {
+    n: i + 1,
+    raw: b.querySelector(".mo-amount").value.replace(/\s/g, "").replace(",", "."),
+    title: b.querySelector(".mo-what").value.trim(),
+    payer: b.querySelector('[data-mo-payer][aria-pressed="true"]')?.dataset.moPayer,
+    shares: [...b.querySelectorAll('[data-mo-share][aria-pressed="true"]')].map(x => x.dataset.moShare),
+    uneven: b.querySelector('[data-mo-split="parts"]')?.getAttribute("aria-pressed") === "true"
+  };
+  if (!r.raw && !r.title) return null;
+  const name = r.title ? `«${r.title}»` : `трате ${r.n}`;
+  r.amount = Math.round(parseFloat(r.raw) * 100) / 100;
+  if (!(r.amount > 0) || r.amount >= 1e7) return { error: `Сумма в ${name} должна быть числом, например 1500 или 349,90.` };
+  if (!r.payer) return { error: `Выбери, кто платил в ${name}.` };
+  if (!r.shares.length) return { error: `Выбери, на кого делим ${name}.` };
+  if (r.uneven) {
+    r.parts = r.shares.map(u => moNum(b.querySelector(`[data-mo-part="${u}"] input`).value));
+    if (r.parts.reduce((a, x) => a + cents(x), 0) !== cents(r.amount)) return { error: `В ${name} доли не сходятся с суммой траты.` };
+  }
+  return r;
+}
+const entryRow = (r, tripId) => ({ trip_id: tripId, payer: r.payer, amount: r.amount, title: r.title || null, shares: r.shares,
+  ...(r.uneven ? { parts: r.parts } : state.v132 ? { parts: null } : {}) });
+
+// Правка своей траты — в шторке, той же формой
+function openItemEdit(item, trip) {
+  const w = openSheet(`<form class="sheet-form" id="moEdit"><div class="gs-h"><h3>Изменить трату</h3></div>
+    <div class="mo-entries">${moEntry(trip, 1, item)}</div>
+    <div class="row"><button type="submit" class="btn primary">Сохранить</button><p class="msg" id="moEditMsg"></p></div></form>`, "Изменить трату");
+  const entry = w.querySelector("[data-mo-entry]");
+  wireEntries(w.querySelector(".mo-entries"), trip);
+  paintParts(entry);
+  w.querySelector("#moEdit").onsubmit = async e => {
+    e.preventDefault();
+    const r = readEntry(entry, 0);
+    if (!r || r.error) return sayIn(w.querySelector("#moEditMsg"), r?.error || "Напиши сумму");
+    const { trip_id, ...row } = entryRow(r, trip.id);
+    const { error } = await sb.from("money_items").update(row).eq("id", item.id);
+    if (error) return sayIn(w.querySelector("#moEditMsg"), "Не сохранилось — попробуй ещё раз");
+    closeGallerySheet(); toast("Сохранено"); viewMoneyTrip(trip.id);
+  };
+}
+// Нажатия внутри блоков трат: кто платил, на кого делим, поровну или суммами, добавить и убрать блок
+function wireEntries(entries, t) {
+  const renumber = () => [...entries.children].forEach((b, i) => { const h = b.querySelector(".mo-entry-head b"); if (h) h.textContent = `Трата ${i + 1}`; });
+  entries.addEventListener("input", e => { const en = e.target.closest("[data-mo-entry]"); if (en) paintParts(en); });
+  entries.onclick = e => {
+    const entry = e.target.closest("[data-mo-entry]"); if (!entry) return;
+    const payerBtn = e.target.closest("[data-mo-payer]");
+    if (payerBtn) return entry.querySelectorAll("[data-mo-payer]").forEach(x => x.setAttribute("aria-pressed", x === payerBtn));
+    const shareBtn = e.target.closest("[data-mo-share]");
+    if (shareBtn) { shareBtn.setAttribute("aria-pressed", shareBtn.getAttribute("aria-pressed") !== "true"); return paintParts(entry); }
+    const split = e.target.closest("[data-mo-split]");
+    if (split) {
+      entry.querySelectorAll("[data-mo-split]").forEach(x => x.setAttribute("aria-pressed", x === split));
+      entry.querySelector(".mo-parts").hidden = split.dataset.moSplit !== "parts";
+      return paintParts(entry);
+    }
+    if (e.target.closest("[data-mo-entry-add]")) {
+      if (entries.children.length >= 10) return;
+      entries.insertAdjacentHTML("beforeend", moEntry(t, entries.children.length + 1));
+      const fresh = entries.lastElementChild;
+      fresh.scrollIntoView({ behavior: "smooth", block: "center" });
+      fresh.querySelector(".mo-amount").focus({ preventScroll: true });
+      return;
+    }
+    if (e.target.closest("[data-mo-entry-del]")) { entry.remove(); renumber(); }
+  };
 }
 
 // ---------- Одна касса ----------
@@ -188,9 +280,12 @@ async function viewMoneyTrip(id) {
           ${avatar(x.payer)}
           <div class="mo-item-main">
             <b>${esc(x.title || "Без названия")}</b>
-            <span class="msg">${esc(nameOf(x.payer))} заплатил · делим на ${x.shares.length}: ${x.shares.map(u => esc(nameOf(u))).join(", ")}</span>
+            <span class="msg">${esc(nameOf(x.payer))} заплатил · ${Array.isArray(x.parts) && x.parts.length === x.shares.length
+              ? x.shares.map((u, k) => `${esc(nameOf(u))} ${rub(cents(x.parts[k]))}`).join(", ")
+              : `делим на ${x.shares.length}: ${x.shares.map(u => esc(nameOf(u))).join(", ")}`}</span>
           </div>
           <div class="mo-item-side"><b>${rub(cents(x.amount))}</b>
+            ${x.created_by === me() && state.v132 ? `<button type="button" class="link-btn" data-mo-edit-item="${x.id}">изменить</button>` : ""}
             ${x.created_by === me() ? `<button type="button" class="link-btn" data-mo-del-item="${x.id}">удалить</button>` : ""}</div>
         </div>`).join("")}</div>` : `<p class="msg">Пока пусто.</p>`}
     </section>
@@ -209,48 +304,18 @@ async function viewMoneyTrip(id) {
   const form = document.getElementById("moAdd");
   if (!form) return;
   const entries = form.querySelector("#moEntries");
-  // Нумерация блоков «Трата 2», «Трата 3» после удаления одного из середины
-  const renumber = () => [...entries.children].forEach((b, i) => { const h = b.querySelector(".mo-entry-head b"); if (h) h.textContent = `Трата ${i + 1}`; });
-  entries.onclick = e => {
-    const entry = e.target.closest("[data-mo-entry]"); if (!entry) return;
-    // Кто платил — один в каждой трате, на кого делим — сколько угодно
-    const payerBtn = e.target.closest("[data-mo-payer]");
-    if (payerBtn) return entry.querySelectorAll("[data-mo-payer]").forEach(x => x.setAttribute("aria-pressed", x === payerBtn));
-    const shareBtn = e.target.closest("[data-mo-share]");
-    if (shareBtn) return shareBtn.setAttribute("aria-pressed", shareBtn.getAttribute("aria-pressed") !== "true");
-    if (e.target.closest("[data-mo-entry-add]")) {
-      if (entries.children.length >= 10) return;
-      entries.insertAdjacentHTML("beforeend", moEntry(t, entries.children.length + 1));
-      const fresh = entries.lastElementChild;
-      fresh.scrollIntoView({ behavior: "smooth", block: "center" });
-      fresh.querySelector(".mo-amount").focus({ preventScroll: true });
-      return;
-    }
-    if (e.target.closest("[data-mo-entry-del]")) { entry.remove(); renumber(); }
-  };
+  wireEntries(entries, t);
   form.onsubmit = async e => {
     e.preventDefault();
     const msg = document.getElementById("moAddMsg"), btn = form.querySelector('button[type="submit"]');
     const fail = t => { msg.className = "msg err"; msg.textContent = t; };
     // Каждый блок — своя трата со своим плательщиком и своими участниками. Пустые блоки пропускаем
-    const rows = [...form.querySelectorAll("[data-mo-entry]")].map((b, i) => ({
-      n: i + 1,
-      raw: b.querySelector(".mo-amount").value.replace(/\s/g, "").replace(",", "."),
-      title: b.querySelector(".mo-what").value.trim(),
-      payer: b.querySelector('[data-mo-payer][aria-pressed="true"]')?.dataset.moPayer,
-      shares: [...b.querySelectorAll('[data-mo-share][aria-pressed="true"]')].map(x => x.dataset.moShare)
-    })).filter(r => r.raw || r.title);
+    const rows = [...form.querySelectorAll("[data-mo-entry]")].map(readEntry).filter(Boolean);
+    const bad = rows.find(r => r.error); if (bad) return fail(bad.error);
     if (!rows.length) return fail("Напиши сумму, например 1500 или 349,90.");
-    for (const r of rows) {
-      const name = r.title ? `«${r.title}»` : `трате ${r.n}`;
-      r.amount = Math.round(parseFloat(r.raw) * 100) / 100;
-      if (!(r.amount > 0) || r.amount >= 1e7) return fail(`Сумма в ${name} должна быть числом, например 1500 или 349,90.`);
-      if (!r.payer) return fail(`Выбери, кто платил в ${name}.`);
-      if (!r.shares.length) return fail(`Выбери, на кого делим ${name}.`);
-    }
     if (btn.disabled) return;
     btn.disabled = true;
-    const { error } = await sb.from("money_items").insert(rows.map(r => ({ trip_id: id, payer: r.payer, amount: r.amount, title: r.title || null, shares: r.shares })));
+    const { error } = await sb.from("money_items").insert(rows.map(r => entryRow(r, id)));
     btn.disabled = false;
     if (error) return fail("Не сохранилось. Попробуй ещё раз.");
     const sum = rows.reduce((s, r) => s + cents(r.amount), 0);
@@ -282,19 +347,26 @@ document.addEventListener("click", async e => {
   }
   // Удаление — в два нажатия, чтобы не стереть случайно
   const twice = (b, label) => { if (b.textContent.trim() !== label) { b.textContent = label; return false; } b.disabled = true; return true; };
+  const ei = e.target.closest("[data-mo-edit-item]");
+  if (ei && tripId) { const it = money.items.find(x => x.id === ei.dataset.moEditItem), tr = money.trips.find(x => x.id === tripId); if (it && tr) openItemEdit(it, tr); return; }
   const di = e.target.closest("[data-mo-del-item]");
+  // Не получилось (нет связи) — говорим об этом и возвращаем кнопку, а не делаем вид, что всё прошло
+  const failed = (b, label) => { toast("Не получилось — проверь связь и попробуй ещё раз"); if (b) { b.disabled = false; b.textContent = label; } };
   if (di && twice(di, "точно?")) {
-    await sb.from("money_items").delete().eq("id", di.dataset.moDelItem);
+    const { error } = await sb.from("money_items").delete().eq("id", di.dataset.moDelItem);
+    if (error) return failed(di, "удалить");
     return viewMoneyTrip(tripId);
   }
   const dp = e.target.closest("[data-mo-del-paid]");
   if (dp && twice(dp, "точно?")) {
-    await sb.from("money_paid").delete().eq("id", dp.dataset.moDelPaid);
+    const { error } = await sb.from("money_paid").delete().eq("id", dp.dataset.moDelPaid);
+    if (error) return failed(dp, "отменить");
     return viewMoneyTrip(tripId);
   }
   if (e.target.closest("[data-mo-close]") && tripId) {
     const t = money.trips.find(x => x.id === tripId); if (!t) return;
-    await sb.from("money_trips").update({ closed: !t.closed }).eq("id", tripId);
+    const { error } = await sb.from("money_trips").update({ closed: !t.closed }).eq("id", tripId);
+    if (error) return failed();
     return viewMoneyTrip(tripId);
   }
   const dt = e.target.closest("[data-mo-del-trip]");

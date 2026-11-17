@@ -22,12 +22,27 @@ self.addEventListener("fetch", (e) => {
   // Открытие сайта: главную страницу всегда сверяем с сервером, а не берём из памяти телефона.
   // Иначе iPhone ещё долго показывал старую версию после обновления сайта
   if (req.mode === "navigate") {
+    // Главная страница сайта (а не что-то постороннее на том же адресе): её копию держим в памяти телефона.
+    // Нет интернета — сайт всё равно открывается: из этой копии и сохранённых файлов, с сохранённой лентой
+    const home = new URL("./", self.registration.scope);
+    const isHome = u.origin === home.origin && (u.pathname === home.pathname || u.pathname === home.pathname + "index.html");
     e.respondWith((async () => {
+      const cache = await caches.open(STATIC);
+      const saved = isHome ? await cache.match(home.href) : null;
       try {
-        const r = await fetch(req.url, { cache: "no-cache", credentials: "same-origin" });
+        // Есть сохранённая копия — сеть ждём не дольше 4 секунд (еле живой интернет хуже, чем его отсутствие)
+        const ctrl = new AbortController();
+        const timer = saved ? setTimeout(() => ctrl.abort(), 4000) : 0;
+        const r = await fetch(req.url, { cache: "no-cache", credentials: "same-origin", signal: ctrl.signal });
+        clearTimeout(timer);
+        if (r.ok && !r.redirected && isHome) {
+          const copy = r.clone();
+          e.waitUntil(cache.put(home.href, copy.clone()).then(() => keepFiles(cache, copy)).catch(() => {}));
+        }
+        if (r.status >= 500 && saved) return saved;   // хостинг лежит — открываем сохранённое
         if (!r.redirected) return r;   // ответ с переадресацией Safari для открытия страницы не принимает
-      } catch (err) {}
-      return fetch(req);
+      } catch (err) { if (saved) return saved; }
+      try { return await fetch(req); } catch (err) { if (saved) return saved; throw err; }
     })());
     return;
   }
@@ -53,6 +68,25 @@ self.addEventListener("fetch", (e) => {
     e.respondWith(staleWhileRevalidate(req));
   }
 });
+
+// Файлы, которые подключает главная страница (стили и скрипты с ?v=номер, библиотека Supabase), кладём в память
+// сразу вместе с ней. Иначе при первом запуске после обновления страница в памяти уже новая, а её файлы ещё нет —
+// и без интернета сайт бы не открылся
+async function keepFiles(cache, page) {
+  const html = await page.text();
+  const files = [...html.matchAll(/(?:src|href)="([^":]+\.(?:js|css)(?:\?v=\d+)?)"/g)].map(m => new URL(m[1], self.registration.scope).href);
+  await Promise.all([...new Set(files)].map(async url => {
+    if (await cache.match(url)) return;
+    const r = await fetch(url);
+    if (r.ok) await cache.put(url, r);
+  }));
+  // Прошлые версии тех же файлов из памяти убираем
+  const now = new Set(files), paths = new Set(files.map(f => new URL(f).pathname));
+  for (const k of await cache.keys()) {
+    const ku = new URL(k.url);
+    if (/[?&]v=\d+/.test(ku.search) && paths.has(ku.pathname) && !now.has(k.url)) cache.delete(k);
+  }
+}
 
 async function cacheFirst(req, versioned) {
   const cache = await caches.open(STATIC);

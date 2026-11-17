@@ -169,6 +169,7 @@ async function selectIn(table, cols, col, ids) {
 }
 
 async function chatSigned(paths) {
+  if (state.offline) return;   // без связи ссылок не получить — не ждём
   const now = Date.now();
   // Обновляем и те, что скоро истекут (меньше 10 минут): голосовое должно запускаться без ожидания
   const need = [...new Set(paths.filter(Boolean))].filter(p => !chat.urls[p] || chat.urls[p].until < now + 10 * 60e3);
@@ -180,12 +181,19 @@ async function chatSigned(paths) {
 }
 const chatUrl = p => chat.urls[p]?.url || "";
 
+// «Прочитано до…» — это время последнего сообщения в чате (его ставит сервер), а не часы телефона.
+// Раньше бралось время телефона: если часы на нём отстают или спешат, счётчик непрочитанных и галочки ✓✓ врали
 async function markRead(chatId) {
-  chat.reads[chatId] = new Date().toISOString();
+  const sent = m => m && !m.pending;   // своё ещё не отправленное сообщение — со временем телефона, его не считаем
+  const mine = chat.open === chatId ? chat.messages.filter(sent) : [];
+  const last = mine[mine.length - 1] || (sent(chat.last[chatId]) ? chat.last[chatId] : null);
   chat.unread[chatId] = 0;
   paintChatBadge();
   if (typeof refreshChatSide === "function") refreshChatSide();
-  await sb.from("chat_reads").upsert({ chat_id: chatId, user_id: me(), last_read_at: chat.reads[chatId] });
+  // В чате пусто или отметка уже не раньше последнего сообщения — записывать нечего
+  if (!last || (chat.reads[chatId] && chat.reads[chatId] >= last.created_at)) return;
+  chat.reads[chatId] = last.created_at;
+  await sb.from("chat_reads").upsert({ chat_id: chatId, user_id: me(), last_read_at: last.created_at });
 }
 
 // Счётчик непрочитанных на пункте «Чаты» в меню
@@ -235,7 +243,9 @@ function chatSubtitle(c) {
 function msgSummary(m) {
   if (!m) return "";
   if (m.text) return m.text;
+  if (m.images?.length > 1) return `📷 ${m.images.length} фото`;
   if (m.image_path) return "📷 Фото";
+  if (m.video_path) return "🎬 Видео";
   if (m.audio_path) return "🎤 Голосовое";
   if (m.poll) return "📊 " + (m.poll.question || "Опрос");
   return "";
@@ -350,6 +360,8 @@ async function viewChat(id) {
     sb.from("chat_reads").select("*").eq("chat_id", id)
   ]);
   chat.messages = (m.data || []).reverse();
+  // Пришло ровно 200 — выше, скорее всего, есть ещё: они подгрузятся, когда долистаешь до верха (loadOlder)
+  chat.hasOlder = (m.data || []).length >= 200; chat.loadingOlder = false;
   // Докуда прочитали остальные — для галочек ✓✓ на моих сообщениях
   chat.otherReads = {};
   (rd.data || []).forEach(r => { if (r.user_id !== me()) chat.otherReads[r.user_id] = r.last_read_at; });
@@ -379,7 +391,7 @@ async function viewChat(id) {
         ${c.kind === "direct" ? `</a>` : `</div>`}
         <button type="button" class="btn icon-btn" data-mute aria-pressed="${chat.muted.has(c.id)}" aria-label="Уведомления из этого чата" title="Уведомления из этого чата">${chat.muted.has(c.id) ? "🔕" : "🔔"}</button>
         <button type="button" class="btn icon-btn" data-csearch aria-label="Поиск по переписке" title="Поиск">🔍</button>
-        ${c.kind === "group" ? `<button type="button" class="btn" data-addppl>+ Люди</button>` : ""}
+        ${c.kind === "group" ? `<button type="button" class="btn" data-addppl>+ Люди</button>${state.v132 ? `<button type="button" class="btn icon-btn" data-gmanage aria-label="Настройки группы" title="Настройки группы">⋯</button>` : ""}` : ""}
       </header>
       <div class="add-ppl" id="addPpl" hidden></div>
       <div class="c-search" id="cSearch" hidden></div>
@@ -396,11 +408,11 @@ async function viewChat(id) {
           <div class="attach-wrap">
             <button type="button" class="attach" id="attach" aria-label="Прикрепить">${CLIP_ICON}</button>
             <div class="attach-menu" id="attachMenu" hidden>
-              <button type="button" data-attach="photo">📷 Фото</button>
+              <button type="button" data-attach="photo">📷 Фото или видео</button>
               <button type="button" data-attach="poll">📊 Опрос</button>
             </div>
           </div>
-          <input type="file" id="chatFile" accept="image/*,.heic,.heif" hidden>
+          <input type="file" id="chatFile" accept="image/*,video/*" multiple hidden>
           <div class="pill"><textarea rows="1" maxlength="2000" placeholder="Сообщение..." aria-label="Сообщение"></textarea></div>
           <div class="rec-lock" id="recLock" aria-hidden="true">${LOCK_ICON}<svg class="rl-up" viewBox="0 0 24 24"><path d="M7 14l5-5 5 5"/></svg></div>
           <button type="submit" class="c-send mic-mode" id="sendBtn" aria-label="Голосовое: зажми и говори">${MIC_ICON}</button>
@@ -454,7 +466,21 @@ function renderMessages(c) {
   return chat.messages.map((m, i) => msgHtml(m, chat.messages[i - 1], c, false, chat.messages[i + 1])).join("");
 }
 
-const linkify = s => s.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+// Ссылки на сам сайт («…/korefany/#/m/<id>») открываются внутри, а ссылка на фото показывается карточкой с превью
+const siteBase = () => location.href.split("#")[0];
+const linkify = s => s.replace(/(https?:\/\/[^\s<]+)/g, u => {
+  const raw = u.replace(/&amp;/g, "&");
+  if (raw.startsWith(siteBase()) && raw.includes("#/")) {
+    const hash = raw.slice(raw.indexOf("#"));
+    const m = hash.match(/^#\/m\/([\w-]+)$/), item = m && state.media.find(x => x.id === m[1]);
+    if (item) {
+      const t = url(thumbPath(item));
+      return `<a class="m-share" href="${esc(hash)}">${t ? `<img src="${t}" alt="">` : ""}<span><b>${item.kind === "video" ? "Видео" : "Фото"} · ${esc(nameOf(item.owner))}</b>${item.caption ? `<i>${esc(item.caption)}</i>` : ""}</span></a>`;
+    }
+    return `<a href="${esc(hash)}">${u}</a>`;
+  }
+  return `<a href="${u}" target="_blank" rel="noopener">${u}</a>`;
+});
 
 // Сообщения подряд от одного человека в пределах 5 минут склеиваются в один блок
 const sameRunAs = (a, b) => a && b && a.author === b.author &&
@@ -476,7 +502,9 @@ const MENU_ICONS = {
   copy: `<svg viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>`,
   pin: `<svg viewBox="0 0 24 24"><path d="M9 4h6l-1 5 3 3v2H7v-2l3-3z"/><path d="M12 14v6"/></svg>`,
   edit: `<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13.5 6.5l4 4"/></svg>`,
-  del: `<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>`
+  del: `<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>`,
+  fwd: `<svg viewBox="0 0 24 24"><path d="M14 6l6 6-6 6"/><path d="M20 12H9a5 5 0 0 0-5 5v1"/></svg>`,
+  flag: `<svg viewBox="0 0 24 24"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>`
 };
 
 // Живые эмодзи: у каждого крупного эмодзи своя анимация — 🔥 горит, ❤️ бьётся, 😂 трясётся от смеха, остальные покачиваются
@@ -561,7 +589,7 @@ function msgHtml(m, prev, c, isNew = false, next = null) {
   const tail = !sameRunAs(m, next);
   const showWho = !mine && c.kind !== "direct";
   const head = showWho && !sameRun;
-  const jumbo = !m.image_path && !m.reply_to && !m.audio_path && !m.poll && isJumbo(m.text);
+  const jumbo = !m.image_path && !m.video_path && !m.reply_to && !m.audio_path && !m.poll && !m.forwarded_from && isJumbo(m.text);
   const meta = `${m.edited_at ? `<span class="m-edited" title="Изменено">изм.</span>` : ""}<time>${timeText(m.created_at)}</time>${mine ? `<i class="tick" data-tick="${m.id}">✓</i>` : ""}`;
   const orig = m.reply_to ? chat.messages.find(x => x.id === m.reply_to) : null;
   return `${newDay ? `<div class="day-sep"><span>${dateLabel(m.created_at)}</span></div>` : ""}
@@ -570,33 +598,42 @@ function msgHtml(m, prev, c, isNew = false, next = null) {
     ${showWho ? `<a href="#/p/${m.author}" class="m-ava">${avatar(m.author)}</a>` : ""}
     <div class="m-body">
       ${head ? `<span class="m-name">${esc(nameOf(m.author))}</span>` : ""}
-      <div class="bubble${m.image_path && !m.text && !m.reply_to && !m.audio_path && !m.poll ? " media-only" : ""}" data-bubble>
+      <div class="bubble${(m.image_path || m.video_path) && !m.text && !m.reply_to && !m.audio_path && !m.poll && !m.forwarded_from ? " media-only" : ""}" data-bubble>
         ${m.reply_to ? `<button type="button" class="m-reply" data-jump="${m.reply_to}">
           <b>${orig ? esc(nameOf(orig.author)) : "Сообщение"}</b><span>${orig ? esc(msgSummary(orig)) : "удалено"}</span></button>` : ""}
-        ${m.image_path ? `<img class="m-img" src="${chatUrl(m.image_path)}" data-zoom="${esc(m.image_path)}" alt="Фото" loading="lazy">` : ""}
+        ${m.forwarded_from ? `<span class="m-fwd">↪ Переслано от ${esc(nameOf(m.forwarded_from))}</span>` : ""}
+        ${m.images?.length > 1 ? `<div class="m-grid n${Math.min(m.images.length, 4)}">${m.images.map((pth, k) => `<img class="m-img" src="${chatUrl(pth)}" data-zoom="${esc(pth)}" alt="Фото ${k + 1}" loading="lazy">`).join("")}</div>`
+          : m.image_path ? `<img class="m-img" src="${chatUrl(m.image_path)}" data-zoom="${esc(m.image_path)}" alt="Фото" loading="lazy">` : ""}
+        ${m.video_path ? `<video class="m-vid" src="${chatUrl(m.video_path)}" controls playsinline preload="metadata"></video>` : ""}
         ${m.audio_path ? voiceHtml(m) : ""}
         ${Array.isArray(m.poll?.options) ? `<div class="poll" data-poll="${m.id}">${pollInner(m)}</div>` : ""}
         ${m.text ? `<p class="m-text">${jumbo ? jumboHtml(m.text) : linkify(esc(m.text))}<span class="m-meta">${meta}</span></p>`
-          : m.image_path && !m.audio_path && !m.poll ? `<span class="m-meta on-img">${meta}</span>`
+          : (m.image_path || m.video_path) && !m.audio_path && !m.poll ? `<span class="m-meta on-img">${meta}</span>`
           : `<span class="m-meta m-meta-block">${meta}</span>`}
       </div>
       <div class="m-reacts" data-mreacts="${m.id}">${msgReactsHtml(m.id)}</div>
       <div class="m-pick">${Object.entries(EMOJI).map(([k, e]) =>
-        `<button type="button" data-mact="react" data-emoji="${k}" aria-label="Реакция">${e}</button>`).join("")}</div>
+        `<button type="button" data-mact="react" data-emoji="${k}" aria-label="Реакция">${e}</button>`).join("")}
+        <button type="button" data-mact="more" class="m-more" aria-label="Другие реакции">＋</button></div>
       <div class="m-menu">
         <button type="button" data-mact="reply">${MENU_ICONS.reply}Ответить</button>
         ${m.text ? `<button type="button" data-mact="copy">${MENU_ICONS.copy}Копировать</button>` : ""}
         ${mine && m.text && !m.poll ? `<button type="button" data-mact="edit">${MENU_ICONS.edit}Изменить</button>` : ""}
+        <button type="button" data-mact="fwd">${MENU_ICONS.fwd}Переслать</button>
         <button type="button" data-mact="pin">${MENU_ICONS.pin}${c.pinned_message === m.id ? "Открепить" : "Закрепить"}</button>
-        ${mine ? `<button type="button" data-mact="del" class="danger">${MENU_ICONS.del}Удалить</button>` : ""}
+        ${mine || isAdmin() ? `<button type="button" data-mact="del" class="danger">${MENU_ICONS.del}Удалить</button>` : ""}
+        ${!mine && state.v132 ? `<button type="button" data-report="message|${m.id}">${MENU_ICONS.flag}Пожаловаться</button>` : ""}
       </div>
     </div>
   </div>`;
 }
 
+// Реакции: три основные (😂 🔥 ❤️) и любые другие эмодзи из «＋» — в порядке появления
+const emo = k => EMOJI[k] || k;
 function msgReactsHtml(id) {
   const rs = chat.reacts.filter(r => r.message_id === id);
-  return Object.entries(EMOJI).map(([k, e]) => {
+  const keys = [...new Set([...Object.keys(EMOJI).filter(k => rs.some(r => r.emoji === k)), ...rs.map(r => r.emoji)])];
+  return keys.map(k => [k, emo(k)]).map(([k, e]) => {
     const n = rs.filter(r => r.emoji === k).length; if (!n) return "";
     const mine = rs.some(r => r.emoji === k && r.user_id === me());
     return `<button type="button" class="m-react" data-mreact="${id}" data-emoji="${k}" aria-pressed="${mine}">${e} ${n}</button>`;
@@ -641,7 +678,19 @@ function wireComposer(c) {
   document.getElementById("attach").onclick = e => { e.stopPropagation(); menu.hidden = !menu.hidden; };
   menu.querySelector('[data-attach="photo"]').onclick = () => { menu.hidden = true; file.click(); };
   menu.querySelector('[data-attach="poll"]').onclick = () => { menu.hidden = true; openPollForm(c); };
-  file.onchange = async () => { const f = file.files[0]; file.value = ""; if (f) await sendMessage(c, { file: f }); };
+  // Можно выбрать сразу много: фото уходят одним сообщением-сеткой (до 10), каждое видео — отдельным
+  file.onchange = async () => {
+    const list = [...file.files]; file.value = "";
+    const pics = list.filter(f => !f.type.startsWith("video/")), vids = list.filter(f => f.type.startsWith("video/"));
+    for (let i = 0; i < pics.length; i += 10) {
+      const part = pics.slice(i, i + 10);
+      await sendMessage(c, part.length === 1 ? { file: part[0] } : { files: part });
+    }
+    for (const v of vids) {
+      if (v.size > KOREFANY.maxVideoMb * 1048576) { toast(`Видео больше ${KOREFANY.maxVideoMb} МБ — обрежь его в галерее телефона`); continue; }
+      await sendMessage(c, { video: v });
+    }
+  };
 
   wireVoice(c, send);
   document.getElementById("recCancel").onclick = () => { stopRecording(false); toast("Голосовое отменено"); };
@@ -882,7 +931,7 @@ function toggleVoice(id, seekFrac = null) {
   }
 }
 // Все файлы сообщений, на которые нужны ссылки
-const msgFiles = list => list.flatMap(x => [x.image_path, x.audio_path]);
+const msgFiles = list => list.flatMap(x => [x.image_path, x.audio_path, x.video_path, ...(x.images || [])]);
 // Пока открыт чат, раз в 5 минут освежаем ссылки на фото и голосовые (живут час)
 setInterval(() => {
   if (chat.open && !document.hidden) chatSigned(msgFiles(chat.messages)).catch(() => {});
@@ -1074,6 +1123,7 @@ async function jumpToMessage(id, createdAt) {
       sb.from("messages").select("*").eq("chat_id", chat.open).gte("created_at", createdAt).order("created_at").limit(300)
     ]);
     chat.messages = [...(older.data || []).reverse(), ...(newer.data || [])];
+    chat.hasOlder = (older.data || []).length >= 20;
     chat.firstUnread = null;
     // Реакции и голоса в опросах для подгруженных сообщений, иначе они показались бы пустыми
     const ids = chat.messages.map(x => x.id), pollIds = chat.messages.filter(x => x.poll).map(x => x.id);
@@ -1093,15 +1143,15 @@ async function jumpToMessage(id, createdAt) {
   el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
 }
 
-async function sendMessage(c, { text = null, file = null, audio = null, duration = null, poll = null }) {
-  if (text && !file && !audio && !poll) return sendText(c, text);
+async function sendMessage(c, { text = null, file = null, files = null, video = null, audio = null, duration = null, poll = null }) {
+  if (text && !file && !files && !video && !audio && !poll) return sendText(c, text);
   const box = document.getElementById("msgs");
   const replyTo = chat.replyTo;
   setReply(null);
   // Фото, голосовое или опрос, пока загружается, — плашка «Отправляю...»
   const temp = document.createElement("div");
   temp.className = "msg mine pending sent";
-  const what = file ? "📷 Отправляю фото..." : audio ? "🎤 Отправляю голосовое..." : "📊 Отправляю опрос...";
+  const what = files ? `📷 Отправляю ${files.length} фото...` : file ? "📷 Отправляю фото..." : video ? "🎬 Отправляю видео..." : audio ? "🎤 Отправляю голосовое..." : "📊 Отправляю опрос...";
   temp.innerHTML = `<div class="m-body"><div class="bubble"><div class="m-img-pending">${what}</div></div></div>`;
   const inner = document.getElementById("msgsIn");
   inner.querySelector(".msgs-empty")?.remove();
@@ -1109,12 +1159,25 @@ async function sendMessage(c, { text = null, file = null, audio = null, duration
   box.scrollTop = box.scrollHeight;
 
   try {
-    let image_path = null, audio_path = null;
-    if (file) {
-      const blob = await resizeImage(file, 1920, 0.85);
-      image_path = `${c.id}/${me()}-${crypto.randomUUID()}.jpg`;
-      await putFile(CHAT_BUCKET, image_path, blob, "image/jpeg");
-      await chatSigned([image_path]);
+    let image_path = null, audio_path = null, video_path = null, images = null;
+    const putPic = async f => {
+      const blob = await resizeImage(f, 1920, 0.85);
+      const path = `${c.id}/${me()}-${crypto.randomUUID()}.jpg`;
+      await putFile(CHAT_BUCKET, path, blob, "image/jpeg");
+      return path;
+    };
+    if (file) { image_path = await putPic(file); await chatSigned([image_path]); }
+    if (files) {
+      images = [];
+      for (const f of files) images.push(await putPic(f));   // по одному: на iPhone так меньше памяти
+      image_path = images[0];
+      await chatSigned(images);
+    }
+    if (video) {
+      const ext = (video.name.split(".").pop() || "mp4").toLowerCase();
+      video_path = `${c.id}/${me()}-${crypto.randomUUID()}.${/^(mp4|mov|webm|m4v|3gp)$/.test(ext) ? ext : "mp4"}`;
+      await putFile(CHAT_BUCKET, video_path, video, video.type);
+      await chatSigned([video_path]);
     }
     if (audio) {
       const ext = /mp4|aac|m4a/.test(audio.type) ? "m4a" : /ogg/.test(audio.type) ? "ogg" : "webm";
@@ -1125,6 +1188,8 @@ async function sendMessage(c, { text = null, file = null, audio = null, duration
     }
     const row = { chat_id: c.id, text, image_path, reply_to: replyTo };
     if (audio_path) Object.assign(row, { audio_path, audio_duration: duration });
+    if (images) row.images = images;
+    if (video_path) row.video_path = video_path;
     if (poll) row.poll = poll;
     const { data, error } = await sb.from("messages").insert(row).select().single();
     if (error) throw error;
@@ -1140,7 +1205,7 @@ async function sendMessage(c, { text = null, file = null, audio = null, duration
     temp.onclick = () => {
       temp.remove();
       chat.replyTo = replyTo;   // ответ, если он был, сохраняется
-      sendMessage(c, { text, file, audio, duration, poll });
+      sendMessage(c, { text, file, files, video, audio, duration, poll });
     };
   }
 }
@@ -1254,6 +1319,8 @@ function wireChatScroll() {
     chat.atBottom = dist < 160;
     btn.hidden = dist < 300 && !chat.newBelow;
     if (dist < 160) { chat.newBelow = 0; paintToBottom(); btn.hidden = true; }
+    // Подходим к верху — заранее подгружаем сообщения постарше
+    if (box.scrollTop < 600) loadOlder();
   }, { passive: true });
   btn.onclick = () => {
     box.scrollTo({ top: box.scrollHeight, behavior: "smooth" });
@@ -1264,6 +1331,47 @@ function wireChatScroll() {
     }, 700);
   };
 }
+// ---------- История: долистал до верха — подгружаются сообщения постарше ----------
+// Чат открывается с последними 200 сообщениями. Раньше выше них было не подняться (только через поиск).
+// Теперь, когда подходишь к верху, сверху встаёт ещё сотня — и так до самого первого сообщения
+async function loadOlder() {
+  const box = document.getElementById("msgs"), inner = document.getElementById("msgsIn");
+  const oldFirst = chat.messages[0];
+  if (!box || !inner || !chat.hasOlder || chat.loadingOlder || !oldFirst || oldFirst.pending) return;
+  const chatId = chat.open, c = chat.list.find(x => x.id === chatId);
+  const still = () => chat.open === chatId && document.body.contains(inner) && chat.messages[0] === oldFirst;
+  chat.loadingOlder = true;
+  try {
+    const { data, error } = await sb.from("messages").select("*").eq("chat_id", chatId)
+      .lt("created_at", oldFirst.created_at).order("created_at", { ascending: false }).limit(100);
+    if (error || !still()) return;
+    chat.hasOlder = data.length >= 100;
+    const older = data.reverse().filter(m => !chat.messages.some(x => x.id === m.id));
+    if (!older.length) return;
+    // Реакции, голоса в опросах и ссылки на фото и голосовые — как при открытии чата
+    const [r, v] = await Promise.all([
+      selectIn("message_reactions", "*", "message_id", older.map(x => x.id)),
+      selectIn("poll_votes", "*", "message_id", older.filter(x => x.poll).map(x => x.id))
+    ]);
+    await chatSigned(msgFiles(older));
+    if (!still()) return;
+    chat.reacts.push(...(r.data || [])); chat.votes.push(...(v.data || []));
+    older.forEach(m => chat.seen.add(m.id));
+    chat.messages = [...older, ...chat.messages];
+    // Прежнее верхнее сообщение рисуем заново: над ним теперь есть сосед, и подпись дня с именем автора могут быть уже не нужны
+    const firstEl = inner.querySelector(`[data-mid="${oldFirst.id}"]`);
+    const height = box.scrollHeight, top = box.scrollTop;
+    if (firstEl) {
+      while (firstEl.previousElementSibling?.matches(".day-sep, .new-sep")) firstEl.previousElementSibling.remove();
+      firstEl.outerHTML = msgHtml(oldFirst, older[older.length - 1], c, false, chat.messages[older.length + 1]);
+    }
+    inner.insertAdjacentHTML("afterbegin", older.map((m, i) => msgHtml(m, older[i - 1], c, false, older[i + 1] || oldFirst)).join(""));
+    // Экран остаётся на том же сообщении: сдвигаем прокрутку ровно на высоту добавленного
+    box.scrollTop = top + (box.scrollHeight - height);
+    paintTicks();
+  } finally { chat.loadingOlder = false; }
+}
+
 // Фото в переписке догружаются уже после открытия, а на телефоне ещё выезжает клавиатура —
 // из-за этого чат «уплывал» вверх от последнего сообщения. Пока человек внизу, держим его внизу
 let bottomObserver = null;
@@ -1355,8 +1463,8 @@ async function toggleMsgReact(id, emoji, fromEl) {
   const { error } = mine
     ? await sb.from("message_reactions").delete().eq("message_id", id).eq("user_id", me()).eq("emoji", emoji)
     : await sb.from("message_reactions").insert({ message_id: id, emoji });
-  if (error) return;
-  if (!mine && fromEl) burst(fromEl, EMOJI[emoji]);
+  if (error) return toast(/emoji|check/i.test(error.message || "") ? "Эта реакция заработает после обновления базы" : "Реакция не сохранилась — проверь связь и нажми ещё раз");
+  if (!mine && fromEl) burst(fromEl, emo(emoji));
   const i = chat.reacts.findIndex(r => r.message_id === id && r.user_id === me() && r.emoji === emoji);
   if (mine && i >= 0) chat.reacts.splice(i, 1);
   if (!mine && i < 0) chat.reacts.push({ message_id: id, user_id: me(), emoji });
@@ -1368,7 +1476,7 @@ async function deleteMessage(id) {
   const { error } = await sb.from("messages").delete().eq("id", id);
   if (error) { toast("Не получилось удалить"); return; }
   // Файл фото или голосового тоже стираем, чтобы не занимал место
-  const files = [m.image_path, m.audio_path].filter(Boolean);
+  const files = [m.image_path, m.audio_path, m.video_path, ...(m.images || [])].filter(Boolean);
   removeFiles(CHAT_BUCKET, files);
   removeMessage(id);
 }
@@ -1385,6 +1493,75 @@ function removeMessage(id) {
   if (c && c.pinned_message === id) { c.pinned_message = null; paintPin(c); }
   const el = document.querySelector(`[data-mid="${id}"]`);
   if (el) { el.classList.add("bye"); setTimeout(() => el.remove(), 280); }
+}
+
+// ---------- Другие реакции: «＋» в меню сообщения ----------
+const MORE_EMOJI = ["👍", "👎", "😍", "🥰", "😮", "😢", "😭", "😡", "🤯", "🤔", "🙏", "👏", "💪", "🤝", "🎉", "💯", "🍻", "👀", "🤡", "💀", "🥶", "🤣", "😎", "✨"];
+function openEmojiPicker(id, bubble) {
+  const w = openSheet(`<div class="gs-h"><h3>Реакция</h3></div>
+    <div class="emo-grid">${MORE_EMOJI.map(e => `<button type="button" data-emo="${e}" aria-label="${e}">${e}</button>`).join("")}</div>`, "Реакция");
+  w.querySelectorAll("[data-emo]").forEach(b => b.onclick = () => { closeGallerySheet(); toggleMsgReact(id, b.dataset.emo, bubble); });
+}
+
+// ---------- Переслать сообщение в другой чат ----------
+// Фото, видео и голосовое копируются в папку того чата (функция files, команда copy): у каждого чата свои права доступа
+function openForward(m) {
+  if (!m) return;
+  const list = chat.list.slice().sort((a, b) => (chat.last[b.id]?.created_at || "").localeCompare(chat.last[a.id]?.created_at || ""));
+  const w = openSheet(`<div class="gs-h"><h3>Переслать</h3></div>
+    <p class="msg">${esc(msgSummary(m)).slice(0, 120)}</p>
+    <div class="share-chats">${list.map(c => `<button type="button" class="share-chat" data-fwd-to="${c.id}"><span class="ava-wrap">${chatAvatar(c)}</span><b>${esc(chatTitle(c))}</b></button>`).join("")}</div>`, "Переслать");
+  w.querySelectorAll("[data-fwd-to]").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      const to = b.dataset.fwdTo;
+      const copy = async pth => pth ? (await filesApi({ op: "copy", from: pth, to_chat: to })).path : null;
+      const row = { chat_id: to, text: m.text || null, forwarded_from: m.forwarded_from || m.author };
+      if (m.images?.length > 1) { row.images = []; for (const x of m.images) row.images.push(await copy(x)); row.image_path = row.images[0]; }
+      else if (m.image_path) row.image_path = await copy(m.image_path);
+      if (m.video_path) row.video_path = await copy(m.video_path);
+      if (m.audio_path) Object.assign(row, { audio_path: await copy(m.audio_path), audio_duration: m.audio_duration });
+      if (m.poll) row.poll = m.poll;
+      const { error } = await sb.from("messages").insert(row);
+      if (error) throw error;
+      closeGallerySheet();
+      toast(`Переслано в «${chatTitle(chat.list.find(c => c.id === to))}»`, to === chat.open ? "" : "Открыть", () => { location.hash = "#/chat/" + to; });
+    } catch (err) { b.disabled = false; toast("Не получилось переслать: " + (err.message || err)); }
+  });
+}
+
+// ---------- Настройки группы: название, участники, выйти ----------
+function openGroupManage() {
+  const c = chat.list.find(x => x.id === chat.open); if (!c || c.kind !== "group") return;
+  const boss = c.created_by === me() || isAdmin();
+  const ids = chat.members[c.id] || [];
+  const w = openSheet(`<form class="sheet-form" id="gmForm">
+      <div class="gs-h"><h3>Группа</h3></div>
+      <label>Название<div class="row"><input type="text" id="gmTitle" maxlength="60" value="${esc(c.title || "")}" required><button type="submit" class="btn primary">Сохранить</button></div></label>
+      <div class="gs-h"><h3>Участники · ${ids.length}</h3></div>
+      <div class="adm-list">${ids.map(u => `<div class="adm-row">${avatar(u)}<b>${esc(nameOf(u))}${u === c.created_by ? " · создатель" : ""}</b>
+        ${boss && u !== me() ? `<button type="button" class="link-btn danger-t" data-gm-kick="${u}">убрать</button>` : ""}</div>`).join("")}</div>
+      <button type="button" class="btn danger" data-gm-leave>Выйти из группы</button>
+      <p class="msg" id="gmMsg"></p></form>`, "Настройки группы");
+  w.querySelector("#gmForm").onsubmit = async e => {
+    e.preventDefault();
+    const { error } = await sb.rpc("rename_group", { p_chat: c.id, p_title: w.querySelector("#gmTitle").value });
+    if (error) return sayIn(w.querySelector("#gmMsg"), "Не сохранилось: " + error.message);
+    c.title = w.querySelector("#gmTitle").value.trim(); closeGallerySheet(); viewChat(c.id); toast("Название изменено");
+  };
+  w.querySelectorAll("[data-gm-kick]").forEach(b => b.onclick = async () => {
+    if (b.textContent !== "точно?") { b.textContent = "точно?"; return; }
+    const { error } = await sb.rpc("remove_from_group", { p_chat: c.id, p_user: b.dataset.gmKick });
+    if (error) return sayIn(w.querySelector("#gmMsg"), "Не получилось: " + error.message);
+    await loadChats(); closeGallerySheet(); viewChat(c.id);
+  });
+  w.querySelector("[data-gm-leave]").onclick = async e => {
+    const b = e.currentTarget;
+    if (b.textContent !== "Точно выйти?") { b.textContent = "Точно выйти?"; return; }
+    const { error } = await sb.from("chat_members").delete().eq("chat_id", c.id).eq("user_id", me());
+    if (error) return sayIn(w.querySelector("#gmMsg"), "Не получилось: " + error.message);
+    closeGallerySheet(); await loadChats(); location.hash = "#/chats"; toast("Ты вышел из группы");
+  };
 }
 
 // ---------- Нажатия в мессенджере ----------
@@ -1411,6 +1588,8 @@ document.addEventListener("click", async e => {
     if (act.dataset.mact === "edit") return startEdit(m);
     if (act.dataset.mact === "del") return deleteMessage(id);
     if (act.dataset.mact === "pin") return pinMessage(id);
+    if (act.dataset.mact === "fwd") return openForward(m);
+    if (act.dataset.mact === "more") return openEmojiPicker(id, act.closest(".msg").querySelector(".bubble"));
   }
   const pill = e.target.closest("[data-mreact]"); if (pill) return toggleMsgReact(pill.dataset.mreact, pill.dataset.emoji, pill);
   // Голосовые: ▶/❚❚ и перемотка нажатием по «волне»
@@ -1447,6 +1626,7 @@ document.addEventListener("click", async e => {
     return;
   }
   if (e.target.closest("[data-addppl]")) return toggleAddPeople();
+  if (e.target.closest("[data-gmanage]")) return openGroupManage();
   const addOne = e.target.closest("[data-addone]");
   if (addOne) {
     const { error } = await sb.rpc("add_to_group", { chat: chat.open, members: [addOne.dataset.addone] });
@@ -1758,7 +1938,8 @@ function chatOnMessage(type, n, o) {
     const known = chat.list.some(c => c.id === n.chat_id);
     if (!known) { loadChats().then(() => refreshChatSide()); }
     // Чат с выключенными уведомлениями: ни звука, ни баннера (сообщение просто тихо появляется в списке)
-    const quiet = chat.muted.has(n.chat_id);
+    // И когда догоняем пропущенное (телефон спал): сообщений может быть много — счётчик вырастет, а трезвонить незачем
+    const quiet = chat.muted.has(n.chat_id) || chat.catching;
     if (n.author !== me() && !quiet) playMessageSound();
     chat.last[n.chat_id] = n;
     if (chat.open === n.chat_id) {
@@ -1768,6 +1949,7 @@ function chatOnMessage(type, n, o) {
         const img = document.querySelector(`[data-mid="${n.id}"] .m-img`); if (img) img.src = chatUrl(n.image_path);
       });
       if (n.audio_path) chatSigned([n.audio_path]);   // чтобы новое голосовое можно было сразу включить
+      if (n.images?.length > 1 || n.video_path) chatSigned(msgFiles([n])).then(() => { const x = chat.messages.find(y => y.id === n.id); if (x) repaintMessage(x); });
       if (!document.hidden) markRead(n.chat_id);
       else if (n.author !== me()) chat.unread[n.chat_id] = (chat.unread[n.chat_id] || 0) + 1;   // прочтём, когда вернётся во вкладку
     } else if (n.author !== me() && known) {
@@ -1821,10 +2003,15 @@ function refreshChatSide(force = false) {
 }
 
 // Запасной режим без живого канала: раз в 15 секунд проверяем новое
-async function chatPoll() {
+// quiet — догоняем пропущенное после сна телефона: без звука и баннера на каждое сообщение
+async function chatPoll(quiet = false) {
   if (!chat.ready || !chat.lastPoll) return;
   const { data } = await sb.from("messages").select("*").gt("created_at", chat.lastPoll).order("created_at");
-  (data || []).forEach(m => { chatOnMessage("INSERT", m); if (m.created_at > chat.lastPoll) chat.lastPoll = m.created_at; });
+  // Пропущено очень много (ответ обрезан на тысяче) — проще перечитать список чатов целиком
+  if ((data || []).length >= 1000) { await loadChats(); refreshChatSide(); return; }
+  chat.catching = quiet;
+  try { (data || []).forEach(m => { chatOnMessage("INSERT", m); if (m.created_at > chat.lastPoll) chat.lastPoll = m.created_at; }); }
+  finally { chat.catching = false; }
   // Галочки «прочитано» в запасном режиме обновляем раз в 15 секунд — и в списке чатов, и в открытой переписке
   const rr = await sb.from("chat_reads").select("*");
   (rr.data || []).forEach(chatOnRead);

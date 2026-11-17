@@ -1869,3 +1869,179 @@ html:has(body.viewer-open), body.viewer-open { overflow: hidden; overscroll-beha
   .gs-wrap, .mem-wrap { top: 0; bottom: 0; height: auto; }
   .pv-sheet .c-list { -webkit-overflow-scrolling: touch; }
 }
+
+/* ---------- v131 ---------- */
+/* Полоска «Нет связи»: интернета нет или сервер не ответил при запуске. В переписке и просмотре фото не мешает —
+   там о сбое и так сообщает само действие («Не отправилось») */
+.netbar {
+  position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom, 0px)); z-index: 55; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 8px; max-width: calc(100vw - 32px); padding: 8px 14px; border-radius: 999px;
+  border: 1px solid rgba(255, 192, 97, .5); background: rgba(21, 17, 31, .95); color: var(--fg);
+  font: inherit; font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; animation: toast-in .3s ease;
+}
+.netbar i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #ffc061; box-shadow: 0 0 8px rgba(255, 192, 97, .8); }
+@media (max-width: 700px) { .netbar { bottom: calc(84px + env(safe-area-inset-bottom, 0px)); } }
+body.in-chat .netbar, body.viewer-open .netbar { display: none; }
+
+/* Зона нажатия у мелких кнопок — не меньше 44px по высоте. Вид прежний: вокруг кнопки невидимое поле */
+.top-m, .react { position: relative; }
+.top-m::after, .react::after, .poster-link::after { content: ""; position: absolute; }
+.top-m::after { inset: -10px -5px; }
+.react::after { inset: -8px -2px; }
+.poster-link::after { inset: -9px -4px; }
+
+/* Поделиться фото: кнопка, шторка, карточка-ссылка в чате */
+.ico { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vertical-align: -3px; }
+.pv-share { margin-left: 0; }
+.share-copy { width: 100%; justify-content: center; }
+.share-chats { display: grid; gap: 6px; max-height: 46vh; overflow-y: auto; }
+.share-chat { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 14px; background: transparent; color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.share-chat:hover, .share-chat:focus-visible { border-color: var(--accent); }
+.share-chat .chat-ava, .share-chat .ava { width: 36px; height: 36px; flex: none; }
+.share-chat b { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.m-share { display: flex; gap: 10px; align-items: center; margin: 2px 0 6px; padding: 6px; border-radius: 12px; background: rgba(255, 255, 255, .06); color: inherit; text-decoration: none; max-width: 280px; }
+.m-share img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; flex: none; }
+.m-share span { display: grid; gap: 2px; min-width: 0; font-size: 13px; }
+.m-share i { font-style: normal; opacity: .75; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Поиск: значок в шапке, поле, результаты */
+.search-l { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; margin-left: auto; border-radius: 50%; color: var(--muted); text-decoration: none; transition: color .2s, box-shadow .2s; }
+.search-l svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.search-l:hover, .search-l.on { color: var(--accent); }
+.search-l.on { filter: drop-shadow(0 0 6px rgba(255, 79, 216, .8)); }
+.capsule .nav + .search-l { margin-left: 4px; }
+@media (max-width: 700px) { .search-l { width: 36px; height: 36px; } .search-l svg { width: 22px; height: 22px; } }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.search-box { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 52px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); }
+.search-box:focus-within { border-color: var(--accent); box-shadow: var(--glow); }
+.search-box svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; }
+.search-box input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: 16px; outline: none; height: 100%; }
+#searchRes { display: grid; gap: 14px; }
+.sr-h { margin: 6px 0 0; font-size: 18px; }
+.sr-h small { color: var(--muted); font-weight: 600; font-size: 14px; }
+.sr-comments { display: grid; gap: 8px; }
+.sr-c { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--fg); font: inherit; text-align: left; cursor: pointer; }
+.sr-c span { display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.sr-c:hover { border-color: var(--accent); }
+
+/* ---------- v132 ---------- */
+/* Колокольчик */
+.bell { position: relative; margin-left: 0; }
+.bell .nav-badge { position: absolute; top: 2px; right: 0; margin: 0; }
+/* Шторки-формы (жалоба, правка цитаты, удаление аккаунта, приглашение) */
+.sheet-form { display: grid; gap: 14px; }
+.sheet-form label { display: grid; gap: 6px; }
+.danger-t { color: #ff6b81 !important; }
+/* Комментарии: ответ, правка, лайк, упоминание */
+.c-acts { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin-top: 4px; font-size: 13px; }
+.c-acts .link-btn { font-size: 13px; padding: 2px 0; }
+.c-like { display: inline-flex; align-items: center; gap: 3px; border: 0; background: none; color: var(--muted); font: inherit; font-size: 14px; cursor: pointer; padding: 2px 4px 2px 0; }
+.c-like[aria-pressed="true"] { color: var(--accent); text-shadow: 0 0 8px rgba(255, 79, 216, .7); }
+.c-like span { font-size: 12px; font-weight: 700; }
+.c-quote { margin: 2px 0 4px; padding: 4px 8px; border-left: 2px solid var(--accent-2); border-radius: 4px; background: rgba(255, 255, 255, .04); font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.c-at { color: var(--accent-2); font-weight: 700; }
+.c-mode { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; margin-bottom: 6px; border-radius: 10px; background: rgba(62, 230, 255, .08); font-size: 13px; flex-basis: 100%; }
+.c-mention { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; flex-basis: 100%; }
+.c-form { flex-wrap: wrap; }
+/* Уведомления */
+.notif-list { display: grid; gap: 6px; }
+.notif { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); text-decoration: none; }
+.notif.unread { border-color: rgba(255, 79, 216, .5); box-shadow: inset 3px 0 0 var(--accent); }
+.notif-main { flex: 1; min-width: 0; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.notif-main small { color: var(--muted); font-size: 12px; }
+.notif img { width: 48px; height: 48px; object-fit: cover; border-radius: 10px; flex: none; }
+.notif-set summary { cursor: pointer; font-weight: 700; }
+.notif-kinds { display: grid; gap: 10px; margin-top: 10px; }
+.toggle { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+.toggle input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
+/* Админка */
+.adm-list { display: grid; gap: 6px; margin-top: 10px; }
+.adm-row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 8px 10px; border-radius: 12px; background: rgba(255, 255, 255, .03); }
+.adm-row > span:first-of-type, .adm-row > b { flex: 1; min-width: 160px; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.adm-row small { color: var(--muted); font-size: 12px; }
+.adm-row.unread { box-shadow: inset 3px 0 0 var(--accent); }
+.adm-acts { display: flex; gap: 12px; flex-wrap: wrap; }
+.err-row b { font-family: ui-monospace, Consolas, monospace; font-size: 13px; font-weight: 600; }
+.inv-link { display: flex; gap: 8px; margin-top: 10px; }
+.inv-link input { flex: 1; min-width: 0; }
+#invNote { flex: 1; min-width: 0; }
+/* Сходки */
+.ev { display: flex; gap: 16px; align-items: flex-start; }
+.ev-date { flex: none; width: 58px; padding: 8px 0; border-radius: 14px; text-align: center; background: linear-gradient(160deg, rgba(255, 79, 216, .25), rgba(62, 230, 255, .15)); border: 1px solid rgba(255, 79, 216, .4); }
+.ev-date b { display: block; font-size: 24px; line-height: 1; }
+.ev-date span { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.ev-main { flex: 1; min-width: 0; display: grid; gap: 8px; }
+.ev-main h3 { margin: 0; }
+.ev-who { display: flex; gap: 4px; flex-wrap: wrap; }
+.ev-who .ava { width: 28px; height: 28px; font-size: 12px; }
+.ev-btn { text-decoration: none; font-size: 18px; }
+/* В этот день */
+.otd h2 { margin: 0 0 8px; font-size: 18px; }
+.otd h2 small { color: var(--muted); font-weight: 600; font-size: 14px; }
+.otd-strip { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; padding-bottom: 4px; }
+.otd-t { position: relative; flex: none; width: 92px; height: 92px; border-radius: 14px; overflow: hidden; border: 1px solid var(--line); background: var(--panel); padding: 0; cursor: pointer; color: #fff; }
+.otd-t img { width: 100%; height: 100%; object-fit: cover; }
+.otd-t span { position: absolute; left: 6px; bottom: 4px; font-size: 12px; font-weight: 800; text-shadow: 0 1px 4px #000; }
+/* Итоги года */
+.th-year { display: inline-block; margin-top: 6px; font-size: 14px; font-weight: 700; color: var(--accent-2); text-decoration: none; }
+.yr-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.yr-stats div { padding: 14px; border-radius: 16px; border: 1px solid var(--line); background: var(--panel); display: grid; gap: 2px; }
+.yr-stats b { font-size: 28px; }
+.yr-stats span { color: var(--muted); font-size: 13px; }
+.yr-people { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+.yr-people h3 { margin: 0 0 10px; }
+.yr-p { display: flex; align-items: center; gap: 12px; color: var(--fg); text-decoration: none; }
+.yr-p b { font-size: 18px; }
+.yr-p small { color: var(--muted); margin-left: auto; }
+/* Загрузка: размер видео и место */
+.up-size { margin: 6px 0 0; font-size: 13px; color: var(--muted); }
+.up-size.err { color: #ff6b81; font-weight: 700; }
+.pv-rep { background: rgba(255, 255, 255, .1); }
+/* Чат: сетка из нескольких фото, видео, «переслано», другие реакции */
+.m-grid { display: grid; gap: 3px; width: min(300px, 70vw); border-radius: 14px; overflow: hidden; }
+.m-grid.n2 { grid-template-columns: 1fr 1fr; }
+.m-grid.n3, .m-grid.n4 { grid-template-columns: 1fr 1fr; }
+.m-grid.n3 .m-img:first-child { grid-column: span 2; }
+.m-grid .m-img { width: 100%; height: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 0; max-height: none; }
+.m-grid.n3 .m-img:first-child { aspect-ratio: 2 / 1; }
+.m-vid { display: block; width: min(300px, 70vw); max-height: 60vh; border-radius: 14px; background: #000; }
+.m-fwd { display: block; font-size: 12px; font-weight: 700; color: var(--accent-2); margin-bottom: 4px; }
+.m-more { font-size: 18px !important; color: var(--muted); }
+.emo-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.emo-grid button { font-size: 26px; padding: 8px 0; border: 0; border-radius: 12px; background: rgba(255, 255, 255, .05); cursor: pointer; }
+.emo-grid button:hover, .emo-grid button:focus-visible { background: rgba(255, 79, 216, .2); }
+/* «Счёт»: у каждого своя сумма */
+.mo-split { gap: 6px; }
+.mo-parts { display: grid; gap: 6px; }
+.mo-part { display: flex !important; align-items: center; gap: 8px; }
+.mo-part span { flex: 1; min-width: 0; }
+.mo-part input { width: 120px; flex: none; }
+.mo-parts-sum { margin: 0; }
+/* «Счёт»: у каждого своя сумма */
+.mo-split { gap: 6px; }
+.mo-parts { display: grid; gap: 6px; }
+.mo-part { display: flex !important; align-items: center; gap: 8px; }
+.mo-part[hidden] { display: none !important; }
+.mo-part span { flex: 1; min-width: 0; }
+.mo-part input { width: 120px; flex: none; }
+.mo-parts-sum { margin: 0; }
+/* Альбом в ленте: фото листаются внутри одного поста */
+.alb { position: relative; }
+.alb-track { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior-x: contain; }
+.alb-track::-webkit-scrollbar { display: none; }
+.alb-track > .post-media { flex: 0 0 100%; scroll-snap-align: center; min-width: 0; }
+.alb-count { position: absolute; top: 10px; right: 10px; padding: 3px 9px; border-radius: 999px; background: rgba(11, 9, 18, .7); color: #fff; font-size: 12px; font-weight: 700; pointer-events: none; }
+.alb-dots { position: absolute; left: 0; right: 0; bottom: 10px; display: flex; justify-content: center; gap: 5px; pointer-events: none; }
+.alb-dots i { width: 6px; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, .45); transition: width .25s, background .25s; }
+.alb-dots i.on { width: 16px; background: var(--accent); }
+.up-album { margin-top: 4px; }
+.alb-track { align-items: center; background: #000; }
+
+/* п. 28: видимая рамка фокуса для управления с клавиатуры (мышью и пальцем её не видно) */
+a:focus-visible, button:focus-visible, [role="button"]:focus-visible, [tabindex]:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--accent-2) !important; outline-offset: 2px;
+}
+/* «Уменьшение движения» в настройках телефона — анимации и плавная прокрутка выключаются везде */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; animation-delay: 0s !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
