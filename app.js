@@ -183,6 +183,17 @@ async function loadAll() {
 }
 
 // Только профили — после смены имени, статуса, аватарки или обложки. Быстрее, чем перекачивать все фото и реакции
+// Лайки комментариев, админы и «выполнен ли 22_v132.sql»
+async function loadExtras() {
+  const [cl, ad] = await Promise.all([
+    fetchAll(() => sb.from("comment_likes").select("comment_id, user_id").order("created_at")),
+    sb.from("admins").select("user_id")
+  ]);
+  state.clikes = cl.error ? [] : cl.data || [];
+  state.v132 = !cl.error;
+  state.admins = ad.error ? [] : (ad.data || []).map(x => x.user_id);
+}
+
 async function reloadProfiles() {
   const { data, error } = await sb.from("profiles").select("*").order("name");
   if (error) throw error;
@@ -261,7 +272,8 @@ async function refreshInBackground(oldRaw) {
   try {
     // Данные с устройства уже на экране — с сервера забираем только изменения (п. 30): новые фото, профили,
     // новые комментарии и реакции, а что удалили и поменяли — по лёгкой сверке (id, подписи, отметки), без перекачки всего
-    if (oldRaw) await Promise.all([reloadProfiles(), mergeNewMedia(), loadChats().catch(() => { chat.ready = false; })]).then(() => poll(true, true));
+    // Лайки комментариев и список админов — тоже: без них сайт не замечал, что база обновилась (v132), и прятал админку
+    if (oldRaw) await Promise.all([reloadProfiles(), mergeNewMedia(), loadExtras(), loadChats().catch(() => { chat.ready = false; })]).then(() => poll(true, true));
     else await Promise.all([loadAll(), loadChats().catch(() => { chat.ready = false; })]);
   } catch (e) { return; }
   const raw = saveCache();
