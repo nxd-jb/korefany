@@ -126,18 +126,26 @@ async function viewFeed() {
   // На телефоне кнопка над обложкой — видна сразу. На компьютере — под обложкой, над колонкой постов
   const bar = feedBarHtml(), top = PHONE.matches;
   if (!fresh) await prepOnThisDay();
+  // Пункт 26, вариант А: на телефоне лента начинается сразу с поста, а обложка «Как это было» встаёт после первого
+  const cover = fresh ? "" : await coverHtml();
   shell("feed", `
     ${bdayBanner()}
-    ${fresh ? "" : onThisDayHtml()}
     ${top ? bar : ""}
-    ${fresh ? "" : await coverHtml()}
-    ${top ? "" : bar}
-    ${list.length ? `<div class="feed" id="feed"></div><div class="feed-more" id="feedMore"></div>`
-      : fresh ? `<div class="empty">Ничего нового, ты всё видел. <button type="button" class="link-btn" data-fnew-close>Показать всю ленту</button></div>`
-      : `<div class="empty">Пока ничего нет. <a href="#/upload">Загрузи первое фото</a>, и с него начнётся история.</div>`}`);
-  if (!fresh) { startCover(); wireParallax(); }
-  if (!list.length) return;
+    ${top ? "" : cover}
+    ${fresh || top ? "" : onThisDayHtml()}
+    ${list.length ? `<div class="feed-layout"><div class="feed-col">${top ? "" : bar}<div class="feed" id="feed"></div><div class="feed-more" id="feedMore"></div></div>
+      <aside class="feed-aside" id="feedAside" aria-label="Коротко о главном">${feedAsideHtml()}</aside></div>`
+      : (top ? "" : bar) + (fresh ? `<div class="empty">Ничего нового, ты всё видел. <button type="button" class="link-btn" data-fnew-close>Показать всю ленту</button></div>`
+      : `<div class="empty">Пока ничего нет. <a href="#/upload">Загрузи первое фото</a>, и с него начнётся история.</div>`)}`);
+  if (!list.length) { if (cover && top) document.querySelector("main.wrap").insertAdjacentHTML("beforeend", cover); if (!fresh) { startCover(); wireParallax(); } return; }
   await appendPosts();
+  if (top && !fresh) {
+    // Обложка и «В этот день» — после первого поста
+    const first = document.querySelector("#feed .post");
+    first?.insertAdjacentHTML("afterend", `<div class="feed-extra">${cover}${onThisDayHtml()}</div>`);
+  }
+  if (!fresh) { startCover(); wireParallax(); }
+  if (!top) fillAsideEvents();
   // Когда долистали до низа — подгружаем следующие посты
   feedObserver?.disconnect();
   feedObserver = new IntersectionObserver(async es => {

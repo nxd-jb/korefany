@@ -1429,6 +1429,7 @@ function wireSwipeReply() {
 function chatOnPresence(st) {
   chat.online = new Set(Object.keys(st || {}));
   paintPresence();
+  if (typeof paintAsideOnline === "function") paintAsideOnline();
   paintMembers();   // открыта шторка «Участники» — кто зашёл или вышел, переезжает сразу
 }
 function paintPresence() {

@@ -23,7 +23,7 @@
 <link rel="preconnect" href="https://jvyitolecgbldlxypwcz.supabase.co" crossorigin>
 <link rel="preconnect" href="https://korefany.netlify.app" crossorigin>
 <!-- ?v=... меняем при каждом обновлении, чтобы телефоны не показывали старые файлы из памяти -->
-<link rel="stylesheet" href="style.css?v=132">
+<link rel="stylesheet" href="style.css?v=133">
 </head>
 <body>
   <!-- Пока сайт запускается, видны мерцающие заготовки ленты -->
@@ -78,23 +78,23 @@
     setTimeout(function () {
       if (!document.querySelector("#app .loading") || document.querySelector("#app .loading b")) return;
       document.getElementById("app").innerHTML =
-        '<div class="loading"><p><b>Сайт не может загрузиться.</b></p>' +
-        '<p>Попробуй по порядку:<br>1. Обнови страницу.<br>2. Переключись с мобильного интернета на Wi‑Fi или наоборот.<br>' +
-        '3. Включи VPN: некоторые провайдеры блокируют сервисы, на которых работает сайт.<br>4. Обнови браузер или открой сайт в Chrome.</p></div>';
+        '<div class="err-screen loading" role="alert"><div class="err-k" aria-hidden="true">К</div><b>Сайт не может загрузиться</b>' +
+        '<p>Переключись с мобильного интернета на Wi‑Fi или наоборот. Не помогло — включи VPN: некоторые провайдеры блокируют сервисы, на которых работает сайт.</p>' +
+        '<button type="button" class="btn primary" onclick="location.reload()">Повторить</button><b hidden></b></div>';
     }, 20000);
   </script>
 
   <!-- Библиотека Supabase 2.45.4 лежит прямо на сайте, чтобы не зависеть от чужих серверов -->
   <script src="vendor/supabase.js"></script>
-  <script src="config.js?v=132"></script>
-  <script src="app.js?v=132"></script>
-  <script src="feed.js?v=132"></script>
-  <script src="pages.js?v=132"></script>
-  <script src="viewer.js?v=132"></script>
-  <script src="boot.js?v=132"></script>
-  <script src="chat.js?v=132"></script>
-  <script src="social.js?v=132"></script>
-  <script src="money.js?v=132"></script>
-  <script src="push.js?v=132"></script>
+  <script src="config.js?v=133"></script>
+  <script src="app.js?v=133"></script>
+  <script src="feed.js?v=133"></script>
+  <script src="pages.js?v=133"></script>
+  <script src="viewer.js?v=133"></script>
+  <script src="boot.js?v=133"></script>
+  <script src="chat.js?v=133"></script>
+  <script src="social.js?v=133"></script>
+  <script src="money.js?v=133"></script>
+  <script src="push.js?v=133"></script>
 </body>
 </html>

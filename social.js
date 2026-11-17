@@ -449,3 +449,51 @@ function logError(message, where) {
 }
 addEventListener("error", e => { if (e.message) logError(e.message, `${(e.filename || "").split("/").pop()}:${e.lineno}:${e.colno}`); });
 addEventListener("unhandledrejection", e => logError(e.reason?.message || e.reason, (e.reason?.stack || "").split("\n")[1]?.trim()));
+
+// ---------- Правая колонка ленты на широком экране (пункт 29, вариант Б) ----------
+// Кто в сети, ближайшие дни рождения и сходки, лидер месяца, свежие цитаты. На телефоне и узком экране её нет
+function feedAsideHtml() {
+  const online = state.profiles.filter(p => p.id !== me() && chat.online?.has(p.id));
+  const soon = state.profiles.map(p => {
+    const md = bdayMD(p); if (!md) return null;
+    const now = new Date(), d = new Date(now.getFullYear(), md[0] - 1, md[1]);
+    if (d < new Date(now.getFullYear(), now.getMonth(), now.getDate())) d.setFullYear(d.getFullYear() + 1);
+    const days = Math.round((d - new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 864e5);
+    return days <= 30 ? { p, days } : null;
+  }).filter(Boolean).sort((a, b) => a.days - b.days).slice(0, 3);
+  const now = new Date(), stats = allMonthStats().get(now.getFullYear() * 12 + now.getMonth()) || {};
+  const lead = leaderOf(stats, "score");
+  const quotes = state.quotes.slice(0, 2);
+  const when = d => d === 0 ? "сегодня" : d === 1 ? "завтра" : `через ${d} ${plural(d, ["день", "дня", "дней"])}`;
+  return `<section class="fa-card" data-fa-online><h3>В сети</h3>${online.length
+      ? online.map(p => `<a class="fa-row" href="#/p/${p.id}"><span class="ava-wrap is-online">${avatar(p.id)}</span>${esc(p.name)}</a>`).join("")
+      : `<p class="msg">Сейчас никого</p>`}</section>
+    <section class="fa-card"><h3>Скоро</h3><div id="faSoon">${soon.map(x => `<a class="fa-row" href="#/p/${x.p.id}">🎂 ${esc(x.p.name)}<small>${when(x.days)}</small></a>`).join("") || `<p class="msg">Ближайших праздников нет</p>`}</div>
+      ${state.v132 ? `<a class="link-btn" href="#/events">Все сходки →</a>` : ""}</section>
+    ${lead ? `<section class="fa-card"><h3>Лидер месяца</h3><a class="fa-row" href="#/top">${avatar(lead[0])}<b>${esc(nameOf(lead[0]))}</b><small>👑 ${lead[1].score}</small></a></section>` : ""}
+    ${quotes.length ? `<section class="fa-card"><h3>Свежие цитаты</h3>${quotes.map(q => `<a class="fa-q" href="#/quotes">«${esc(q.text.slice(0, 90))}${q.text.length > 90 ? "…" : ""}»<small>${q.author_id ? esc(nameOf(q.author_id)) : "Кто-то"}</small></a>`).join("")}</section>` : ""}`;
+}
+// Ближайшие сходки догружаются в колонку отдельно (их нет в сохранённых данных)
+async function fillAsideEvents() {
+  if (!state.v132 || state.offline || !document.getElementById("faSoon")) return;
+  const { data } = await sb.from("events").select("id, title, starts_at").gte("starts_at", new Date(Date.now() - 6 * 3600e3).toISOString()).order("starts_at").limit(2);
+  const box = document.getElementById("faSoon"); if (!box || !data?.length) return;
+  box.insertAdjacentHTML("afterbegin", data.map(e => {
+    const d = new Date(e.starts_at);
+    return `<a class="fa-row" href="#/events">📅 ${esc(e.title)}<small>${d.getDate()} ${MONTHS_OF[d.getMonth()]}</small></a>`;
+  }).join(""));
+  box.querySelector(".msg")?.remove();
+}
+// Кто-то зашёл или вышел — обновляем «В сети» в колонке
+function paintAsideOnline() {
+  const el = document.querySelector("[data-fa-online]"); if (!el) return;
+  const tmp = document.createElement("div"); tmp.innerHTML = feedAsideHtml();
+  el.replaceWith(tmp.querySelector("[data-fa-online]"));
+}
+
+// ---------- Экран «нет связи», «ошибка» (пункт 27, вариант А) ----------
+// Один вид для всех разделов: неоновая «К», понятное объяснение и кнопка
+function errorScreen(title, text, button = "Повторить", action = "location.reload()") {
+  return `<div class="err-screen" role="alert"><div class="err-k" aria-hidden="true">К</div><b>${esc(title)}</b><p>${text}</p>
+    ${button ? `<button type="button" class="btn primary" onclick="${action}">${esc(button)}</button>` : ""}</div>`;
+}

@@ -2045,3 +2045,35 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible, [tabindex]
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; animation-delay: 0s !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+/* Пункт 27 А: экран «нет связи» / «ошибка» — неоновая «К», объяснение, кнопка */
+.err-screen { display: grid; justify-items: center; gap: 12px; text-align: center; padding: 56px 16px; max-width: 420px; margin: 0 auto; }
+.err-screen b { font-size: 20px; }
+.err-screen p { margin: 0; color: var(--muted); }
+.err-screen small { font-size: 12px; opacity: .7; overflow-wrap: anywhere; }
+.err-k { width: 84px; height: 84px; border-radius: 50%; border: 2px solid var(--accent); display: grid; place-items: center; font-family: var(--font-logo); font-size: 34px; color: #ffe6fb;
+  text-shadow: 0 0 10px var(--accent); background: radial-gradient(circle, rgba(255, 79, 216, .22), rgba(255, 79, 216, .05) 60%, transparent 70%); }
+#app > .err-screen { min-height: 70vh; align-content: center; }
+
+/* Пункт 26 А: обложка после первого поста (телефон) */
+.feed-extra { display: grid; gap: 22px; }
+.feed-extra .cover { margin: 0; }
+
+/* Пункт 29 Б: правая колонка на широком экране */
+.feed-layout { display: grid; gap: 28px; justify-content: center; grid-template-columns: minmax(0, 560px); }
+.feed-col { min-width: 0; display: grid; gap: 0; }
+.feed-aside { display: none; }
+@media (min-width: 1180px) {
+  .feed-layout { grid-template-columns: minmax(0, 560px) 290px; align-items: start; }
+  .feed-aside { display: grid; gap: 14px; position: sticky; top: 92px; }
+}
+.fa-card { display: grid; gap: 8px; padding: 14px; border-radius: 18px; border: 1px solid var(--line); background: var(--panel); }
+.fa-card h3 { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
+.fa-card .msg { margin: 0; font-size: 13px; }
+.fa-row { display: flex; align-items: center; gap: 10px; color: var(--fg); text-decoration: none; font-size: 14px; }
+.fa-row .ava { width: 30px; height: 30px; font-size: 13px; }
+.fa-row small { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.fa-row:hover { color: var(--accent); }
+.fa-q { display: grid; gap: 2px; color: var(--fg); text-decoration: none; font-size: 13px; font-style: italic; }
+.fa-q small { font-style: normal; color: var(--muted); }
+.feed-col > .feed-top, .feed-col > .newsbar { margin-bottom: 22px; }

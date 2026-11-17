@@ -26,8 +26,8 @@ async function route() {
   try {
     // Переписка и «Счёт» на телефоне не хранятся — без связи их не открыть. Говорим об этом сразу, а не ждём ответа сервера
     if (state.offline && /^\/(chat\/|money)/.test(h)) {
-      shell(h.startsWith("/money") ? "money" : "chats", `<div class="empty" data-offline>Нет связи. Этот раздел откроется, когда появится интернет.
-        <a href="${h.startsWith("/money") ? "#/" : "#/chats"}">${h.startsWith("/money") ? "В ленту" : "К списку чатов"}</a></div>`);
+      shell(h.startsWith("/money") ? "money" : "chats", `<div data-offline>${errorScreen("Нет связи", "Этот раздел откроется сам, когда появится интернет. Лента и фото доступны и без него.",
+        h.startsWith("/money") ? "В ленту" : "К списку чатов", h.startsWith("/money") ? "location.hash='#/'" : "location.hash='#/chats'")}</div>`);
     }
     else if (h === "/") await viewFeed();
     else if (h.startsWith("/m/")) await viewOne(h.slice(3));
@@ -50,7 +50,10 @@ async function route() {
     else if (h.startsWith("/invite/")) { location.hash = "#/"; toast("Ты уже вошёл — ссылка-приглашение нужна новому человеку"); }
     else location.hash = "#/";
   } catch (err) {
-    if (seq === routeSeq) $app.innerHTML = `<p class="loading">Что-то сломалось: ${esc(err.message || err)}. Обнови страницу.</p>`;
+    if (seq === routeSeq && err.message !== "stale") {
+      $app.innerHTML = errorScreen("Страница не открылась", `Попробуй ещё раз. Если повторится — напиши Косте, что делал перед этим.<br><small>${esc(err.message || err)}</small>`, "Повторить", "route()");
+      if (typeof logError === "function") logError(err.message || err, "route " + location.hash);
+    }
   }
   if (seq === routeSeq) window.scrollTo(0, 0);
 }
@@ -191,8 +194,7 @@ function onAuth(event, session, guess = false) {
       if (offline) {
         // Связи нет, и сохранённого на этом устройстве тоже нет — показать нечего. Экран входа тут не нужен: вход цел.
         // Сервер ответит — этот же обработчик загрузит сайт как обычно
-        $app.innerHTML = `<div class="loading"><p><b>Нет связи с сервером.</b></p><p>Проверь интернет или включи VPN — сайт откроется сам, как только связь появится.</p>
-          <p><button type="button" class="btn primary" onclick="location.reload()">Попробовать ещё раз</button></p></div>`;
+        $app.innerHTML = errorScreen("Нет связи с сервером", "Проверь интернет или включи VPN.<br>Сайт откроется сам, как только связь появится.");
         return;
       }
       // Мерцающие заготовки ленты, пока грузятся данные (такие же стоят в index.html)
@@ -215,8 +217,8 @@ function onAuth(event, session, guess = false) {
       }
       catch (err) {
         $app.innerHTML = err.message === "timeout"
-          ? `<div class="loading"><p><b>Сервер не отвечает.</b></p><p>Переключись с мобильного интернета на Wi‑Fi или включи VPN, потом обнови страницу.</p></div>`
-          : `<p class="loading">Не получилось загрузить: ${esc(err.message)}</p>`;
+          ? errorScreen("Сервер не отвечает", "Переключись с мобильного интернета на Wi‑Fi или включи VPN и попробуй ещё раз.")
+          : errorScreen("Не получилось загрузить", `Попробуй ещё раз через минуту.<br><small>${esc(err.message)}</small>`);
         return;
       }
       state.shown = state.live = id;
