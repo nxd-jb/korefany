@@ -178,7 +178,7 @@ function paintBest() {
   const pic = m => {
     const t = url(thumbPath(m)), big = m.kind === "photo" ? url(midPath(m)) || url(m.path) : "";
     return `<span class="b-pic">${m.kind === "video"
-      ? `<img class="b-ph" ${t ? `src="${t}"` : ""} data-vthumb="${m.id}" alt="" decoding="async"><span class="play">▶ видео</span>`
+      ? `<img class="b-ph" ${t ? `src="${t}"` : ""} data-vthumb="${m.id}" alt="" decoding="async">${PLAY_BADGE}`
       : `${t ? `<img class="b-ph" src="${t}" alt="" decoding="async">` : ""}${big ? `<img class="b-full fade" src="${big}" alt="" decoding="async">` : ""}`}</span>`;
   };
   const who = m => {
@@ -666,7 +666,7 @@ function renderMeTab() {
   }
 
   if (t === "notify") {
-    box.innerHTML = `<div class="card"><h2 style="margin:0">Уведомления на телефон</h2><div id="pushBox"><p class="msg">Проверяю...</p></div></div>`;
+    box.innerHTML = `<div class="card"><h2 style="margin:0">Уведомления на телефон</h2><div id="pushBox"><p class="msg">Проверяю...</p></div></div>${notifKindsHtml()}`;
     renderPushBox();
   }
 

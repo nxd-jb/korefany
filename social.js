@@ -92,10 +92,7 @@ async function viewNotifications() {
     <div class="head" style="justify-content:space-between"><div><h1>Уведомления</h1><p class="sub">Что произошло, пока тебя не было</p></div>
       <button type="button" class="btn" data-notif-all>Прочитать все</button></div>
     <div id="notifList" class="notif-list"></div>
-    <details class="card notif-set"><summary>Что присылать на телефон</summary>
-      <p class="msg">Здесь, в колокольчике, видно всё. Выключенное просто не будет приходить уведомлением на телефон.</p>
-      <div class="notif-kinds">${NOTIF_KINDS.map(([k, t]) => `<label class="toggle"><input type="checkbox" data-notif-kind="${k}" ${(profile(me())?.notify_off || []).includes(k) ? "" : "checked"}><span>${t}</span></label>`).join("")}</div>
-    </details>`);
+    <p class="msg notif-hint">Что присылать на телефон, настраивается в <a href="#/me" data-goto-notify>Профиль → Уведомления</a>.</p>`);
   await loadNotifs();
   paintNotifs();
   // Открыл — значит увидел: через секунду всё отмечается прочитанным (розовые точки ещё видны)
@@ -119,8 +116,16 @@ async function markNotifsRead() {
   state.notifs.forEach(n => { if (ids.includes(n.id)) n.read = true; });
   paintBell();
 }
+// Блок «Что присылать на телефон» — во вкладке «Уведомления» профиля
+function notifKindsHtml() {
+  if (!state.v132) return "";
+  return `<div class="card"><h2 style="margin:0">Что присылать на телефон</h2>
+    <p class="msg">В колокольчике на сайте видно всё. Выключенное просто не будет приходить уведомлением на телефон.</p>
+    <div class="notif-kinds">${NOTIF_KINDS.map(([k, t]) => `<label class="toggle"><input type="checkbox" data-notif-kind="${k}" ${(profile(me())?.notify_off || []).includes(k) ? "" : "checked"}><span>${t}</span></label>`).join("")}</div></div>`;
+}
 document.addEventListener("click", async e => {
   if (e.target.closest("[data-notif-all]")) { await markNotifsRead(); paintNotifs(); }
+  if (e.target.closest("[data-goto-notify]")) state.meTab = "notify";
 });
 document.addEventListener("change", async e => {
   const cb = e.target.closest("[data-notif-kind]"); if (!cb) return;
@@ -284,7 +289,17 @@ document.addEventListener("click", async e => {
   const ro = t.closest("[data-rep-open]");
   if (ro) { const [k, id] = ro.dataset.repOpen.split("|"); return openReported(k, id); }
   const rd = t.closest("[data-rep-done]");
-  if (rd) { await sb.from("reports").update({ status: "done" }).eq("id", rd.dataset.repDone); return loadAdminLists(); }
+  if (rd) {
+    // Ответ с select показывает, правда ли строка поменялась: пустой — база не дала закрыть (раньше молча ничего не происходило)
+    rd.disabled = true;
+    const { data, error } = await sb.from("reports").update({ status: "done" }).eq("id", rd.dataset.repDone).select("id");
+    if (error || !data?.length) {
+      rd.disabled = false;
+      return toast(error ? "Не получилось: " + (error.message || error.code) : "База не дала закрыть жалобу — проверь, что ты админ");
+    }
+    const row = rd.closest(".adm-row"); row?.classList.remove("unread"); rd.outerHTML = "<small>разобрано</small>";
+    return;
+  }
   if (t.closest("[data-err-clear]")) {
     const b = t.closest("[data-err-clear]");
     if (b.textContent !== "Точно очистить?") { b.textContent = "Точно очистить?"; return; }
@@ -497,3 +512,60 @@ function errorScreen(title, text, button = "Повторить", action = "locat
   return `<div class="err-screen" role="alert"><div class="err-k" aria-hidden="true">К</div><b>${esc(title)}</b><p>${text}</p>
     ${button ? `<button type="button" class="btn primary" onclick="${action}">${esc(button)}</button>` : ""}</div>`;
 }
+
+// ---------- Кто поставил реакцию (правка 17А) ----------
+// Компьютер: навёл на реакцию — через долю секунды окошко с именами. Телефон: долгое нажатие на реакцию
+// (обычное нажатие по-прежнему ставит или снимает свою)
+const RX_SEL = "[data-react], [data-mreact], [data-clike]";
+function reactorsOf(el) {
+  if (el.dataset.react) return reactsOf(el.dataset.react, el.dataset.id).filter(r => r.emoji === el.dataset.emoji).map(r => r.user_id);
+  if (el.dataset.mreact) return (chat.reacts || []).filter(r => r.message_id === el.dataset.mreact && r.emoji === el.dataset.emoji).map(r => r.user_id);
+  if (el.dataset.clike) return (state.clikes || []).filter(r => r.comment_id === el.dataset.clike).map(r => r.user_id);
+  return [];
+}
+let rxTip = null, rxTimer = 0, rxFor = null, rxEatClick = 0;
+function hideRxTip() { clearTimeout(rxTimer); rxTip?.remove(); rxTip = null; rxFor = null; }
+function showRxTip(el) {
+  const ids = [...new Set(reactorsOf(el))];
+  if (!ids.length || !el.isConnected) return false;
+  hideRxTip(); rxFor = el;
+  const emoji = el.dataset.clike ? "♥" : el.dataset.mreact ? emo(el.dataset.emoji) : (EMOJI[el.dataset.emoji] || el.dataset.emoji);
+  rxTip = document.createElement("div");
+  rxTip.className = "rx-tip"; rxTip.setAttribute("role", "tooltip");
+  rxTip.innerHTML = `<div class="rx-tip-h">${emoji} <b>${ids.length}</b></div>` +
+    ids.slice(0, 12).map(u => `<div class="rx-tip-p">${avatar(u)}<span>${esc(u === me() ? "Ты" : nameOf(u))}</span></div>`).join("") +
+    (ids.length > 12 ? `<div class="rx-tip-more">и ещё ${ids.length - 12}</div>` : "");
+  document.body.appendChild(rxTip);
+  const r = el.getBoundingClientRect(), t = rxTip.getBoundingClientRect();
+  const left = Math.min(innerWidth - t.width - 8, Math.max(8, r.left + r.width / 2 - t.width / 2));
+  const top = r.top - t.height - 8 >= 8 ? r.top - t.height - 8 : r.bottom + 8;
+  rxTip.style.left = left + "px"; rxTip.style.top = top + "px";
+  return true;
+}
+if (matchMedia("(hover: hover) and (pointer: fine)").matches) {
+  document.addEventListener("mouseover", e => {
+    const el = e.target.closest?.(RX_SEL);
+    if (el === rxFor) return;
+    hideRxTip();
+    if (el) rxTimer = setTimeout(() => showRxTip(el), 350);
+  });
+}
+// Долгое нажатие на телефоне
+let rxPress = 0, rxX = 0, rxY = 0;
+document.addEventListener("touchstart", e => {
+  const el = e.target.closest?.(RX_SEL);
+  if (rxTip && !e.target.closest(".rx-tip")) hideRxTip();
+  clearTimeout(rxPress);
+  if (!el || e.touches.length > 1) return;
+  rxX = e.touches[0].clientX; rxY = e.touches[0].clientY;
+  rxPress = setTimeout(() => { if (showRxTip(el)) { rxEatClick = Date.now(); navigator.vibrate?.(12); } }, 450);
+}, { passive: true });
+document.addEventListener("touchmove", e => { if (Math.hypot(e.touches[0].clientX - rxX, e.touches[0].clientY - rxY) > 10) clearTimeout(rxPress); }, { passive: true });
+document.addEventListener("touchend", () => clearTimeout(rxPress), { passive: true });
+// Отпустил палец после долгого нажатия — это не «поставить реакцию»
+document.addEventListener("click", e => {
+  if (Date.now() - rxEatClick < 800 && e.target.closest(RX_SEL)) { e.preventDefault(); e.stopImmediatePropagation(); rxEatClick = 0; }
+}, true);
+document.addEventListener("contextmenu", e => { if (Date.now() - rxEatClick < 800 && e.target.closest(RX_SEL)) e.preventDefault(); });
+addEventListener("scroll", hideRxTip, true);
+addEventListener("hashchange", hideRxTip);

@@ -99,6 +99,7 @@ function foldAlbums(list) {
 }
 // Для просмотра на весь экран альбом разворачивается обратно: листаешь все его фото подряд
 const unfoldAlbums = list => list.flatMap(m => m.album ? albumOf(m) : [m]);
+const CAL_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>`;
 const SORT_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16M3 16l4 4 4-4M17 20V4M13 8l4-4 4 4"/></svg>`;
 
 // Над лентой: синяя «Смотреть новые фото» и значок порядка (или полоска «Новые для тебя», когда они открыты)
@@ -108,10 +109,13 @@ function feedBarHtml() {
       <button type="button" class="link-btn" data-seen-all>Всё видел</button>
       <button type="button" class="newsbar-x" data-fnew-close aria-label="Показать всю ленту">✕</button></div>`;
   const n = newMedia().length, sort = feedSort(), sortName = F_SORTS.find(s => s[0] === sort)[1];
-  return `<div class="feed-top" id="feedBar"><div class="feedbar${n ? "" : " only-sort"}">
-      ${n ? `<button type="button" class="newbtn" data-fnew>Смотреть новые фото <em>${n}</em></button>` : ""}
-      <button type="button" class="sortbtn" data-fsheet aria-label="Порядок ленты: ${sortName}" title="Порядок ленты">${SORT_ICON}${n ? "" : `<span>${sortName}</span>`}</button>
-      ${state.v132 ? `<a class="sortbtn ev-btn" href="#/events" aria-label="Сходки" title="Сходки">📅</a>` : ""}
+  // Слева «Лента» (или кнопка новых фото), справа порядок и сходки одной капсулой (правка 4А)
+  return `<div class="feed-top" id="feedBar"><div class="feedbar">
+      ${n ? `<button type="button" class="newbtn" data-fnew>Смотреть новые фото <em>${n}</em></button>` : `<h2 class="feed-title">Лента</h2>`}
+      <div class="fseg">
+        <button type="button" data-fsheet aria-label="Порядок ленты: ${sortName}" title="Порядок ленты">${SORT_ICON}${n ? "" : `<span>${sortName}</span>`}</button>
+        ${state.v132 ? `<a href="#/events" aria-label="Сходки" title="Сходки">${CAL_ICON}${n ? "" : `<span>Сходки</span>`}</a>` : ""}
+      </div>
     </div>
     ${n && sort !== "taken" ? `<p class="feedsub">Порядок: <b>${sortName.toLowerCase()}</b></p>` : ""}</div>`;
 }
@@ -872,7 +876,7 @@ async function viewBatch(owner, lastId, n) {
       <button type="button" class="batch-hero" data-open="${first.id}" aria-label="${esc(first.caption || "Открыть")}">
         ${first.kind === "video" ? `<img class="${heroSrc ? "fade " : ""}vthumb" ${heroSrc ? `src="${heroSrc}"` : ""} data-vthumb="${first.id}" alt="">`
           : heroSrc ? `<img class="fade" src="${heroSrc}" alt="">` : `<span class="noimg">🖼</span>`}
-        ${first.kind === "video" ? `<span class="play">▶ видео</span>` : ""}
+        ${first.kind === "video" ? `${PLAY_BADGE}` : ""}
         ${first.caption ? `<span class="batch-cap">${esc(first.caption)}</span>` : ""}
       </button>
       ${rest.length ? await grid(rest, "", true) : ""}

@@ -105,6 +105,9 @@ document.addEventListener("pointerdown", unlockSound, { once: true });
 document.addEventListener("keydown", unlockSound, { once: true });
 
 const CLIP_ICON = `<svg viewBox="0 0 24 24"><path d="M20 11.5l-8.3 8.3a5 5 0 0 1-7-7l8.6-8.6a3.4 3.4 0 0 1 4.8 4.8l-8.4 8.4a1.7 1.7 0 0 1-2.4-2.4l7.7-7.7"/></svg>`;
+// Иконки меню скрепки (правка 7А): своя линия вместо эмодзи
+const ATT_IMG = `<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>`;
+const ATT_POLL = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 20V10M12 20V4M19 20v-7"/></svg>`;
 const MIC_ICON = `<svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>`;
 const ATTACH_ICON = `<svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><circle cx="12" cy="12" r="3.5"/><path d="M8 5l1.5-2h5L16 5"/></svg>`;
 const timeText = iso => { const d = new Date(iso); return `${d.getHours()}:${String(d.getMinutes()).padStart(2, "0")}`; };
@@ -211,9 +214,28 @@ function paintChatBadge() {
 // ---------- Как показывать чат ----------
 
 const otherIn = c => (chat.members[c.id] || []).find(u => u !== me());
+// Избранное — чат с самим собой (23_saved.sql): заметки, ссылки, пересланное себе. Никто больше его не видит
+// Значок — неоновая закладка в паре с вывеской «К» общего чата, но без мигания (выбор Кости, вариант Б)
+const SAVED_AVA = `<span class="ava chat-ava saved" aria-label="Избранное"><svg viewBox="0 0 48 48" aria-hidden="true">
+    <circle cx="24" cy="24" r="21" fill="rgba(62,230,255,.09)"/><circle cx="24" cy="24" r="19.6" fill="rgba(62,230,255,.11)"/>
+    <circle cx="24" cy="24" r="18" fill="#140f1e" stroke="#3ee6ff" stroke-width="1.6"/>
+    <g fill="none" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M18 14h12a1 1 0 0 1 1 1v19l-7-4.6-7 4.6V15a1 1 0 0 1 1-1z" stroke="rgba(62,230,255,.25)" stroke-width="6"/>
+      <path d="M18 14h12a1 1 0 0 1 1 1v19l-7-4.6-7 4.6V15a1 1 0 0 1 1-1z" stroke="rgba(62,230,255,.5)" stroke-width="3.2"/>
+      <path d="M18 14h12a1 1 0 0 1 1 1v19l-7-4.6-7 4.6V15a1 1 0 0 1 1-1z" stroke="#d9fbff" stroke-width="1.6"/>
+    </g></svg></span>`;
+const savedChat = () => chat.list.find(c => c.kind === "saved");
+async function openSaved() {
+  const have = savedChat(); if (have) { location.hash = `#/chat/${have.id}`; return; }
+  const { data, error } = await sb.rpc("open_saved");
+  if (error) return toast(/open_saved|PGRST202|function/i.test(error.message + error.code) ? "Избранное появится после обновления базы (23_saved.sql)" : "Не получилось открыть Избранное");
+  await loadChats();
+  location.hash = `#/chat/${data}`;
+}
 function chatTitle(c) {
   if (c.kind === "general") return "Общий чат";
   if (c.kind === "group") return c.title || "Группа";
+  if (c.kind === "saved") return "Избранное";
   return nameOf(otherIn(c));
 }
 function chatAvatar(c) {
@@ -230,12 +252,14 @@ function chatAvatar(c) {
       <path class="core" d="M8 6v12M8 12.2 15.8 6M10.9 10 16.2 18"/>
     </g></svg></span>`;
   if (c.kind === "direct") return avatar(otherIn(c));
+  if (c.kind === "saved") return SAVED_AVA;
   const t = (c.title || "Г").trim().split(/\s+/).slice(0, 2).map(w => w[0]).join("").toUpperCase();
   return `<span class="ava chat-ava group">${esc(t)}</span>`;
 }
 function chatSubtitle(c) {
   if (c.kind === "general") return `${state.profiles.length} ${plural(state.profiles.length, ["корефан", "корефана", "корефанов"])}`;
   if (c.kind === "direct") return profile(otherIn(c))?.status || "личная переписка";
+  if (c.kind === "saved") return "видишь только ты";
   const ids = chat.members[c.id] || [];
   return ids.map(nameOf).join(", ");
 }
@@ -256,6 +280,25 @@ function preview(m) {
   const who = m.author === me() ? "Ты" : nameOf(m.author);
   return `${who}: ${msgSummary(m)}`;
 }
+// Подпись в списке чатов: вместо эмодзи 🎤 📷 🎬 📊 — тонкие неоновые значки (правка 10Б)
+const LIST_ICONS = {
+  mic: `<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>`,
+  img: `<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/>`,
+  vid: `<rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3"/>`,
+  poll: `<path d="M5 20V10M12 20V4M19 20v-7"/>`
+};
+const listIcon = k => `<svg class="cr-ic" viewBox="0 0 24 24" aria-hidden="true">${LIST_ICONS[k]}</svg>`;
+function previewHtml(m) {
+  if (!m) return "Сообщений пока нет";
+  const who = esc(m.author === me() ? "Ты" : nameOf(m.author)) + ": ";
+  if (m.text) return who + esc(m.text);
+  if (m.audio_path) return `${who}${listIcon("mic")}Голосовое${m.audio_duration ? ` · <b class="cr-dur">${mmss(Math.round(m.audio_duration))}</b>` : ""}`;
+  if (m.images?.length > 1) return `${who}${listIcon("img")}${m.images.length} фото`;
+  if (m.image_path) return `${who}${listIcon("img")}Фото`;
+  if (m.video_path) return `${who}${listIcon("vid")}Видео`;
+  if (m.poll) return `${who}${listIcon("poll")}${esc(m.poll.question || "Опрос")}`;
+  return who;
+}
 function shortTime(iso) {
   const d = new Date(iso), now = new Date();
   if (d.toDateString() === now.toDateString()) return timeText(iso);
@@ -270,6 +313,8 @@ function chatListHtml(activeId) {
   const sorted = [...chat.list].sort((a, b) => {
     if (a.kind === "general") return -1;
     if (b.kind === "general") return 1;
+    if (a.kind === "saved") return -1;
+    if (b.kind === "saved") return 1;
     return ((chat.last[b.id] || b).created_at).localeCompare((chat.last[a.id] || a).created_at);
   });
   const others = state.profiles.filter(p => p.id !== me());
@@ -289,14 +334,15 @@ function chatListHtml(activeId) {
       <label>Кто в группе<div class="chips">${pick("data-gm")}</div></label>
       <div class="row"><button type="submit" class="btn primary">Создать</button><p class="msg" id="gMsg"></p></div>
     </form>` : ""}
-    <div class="chat-list">${sorted.map((c, i) => {
+    <div class="chat-list">${state.v132 && !savedChat() ? `<button type="button" class="chat-row" data-open-saved>
+        <span class="ava-wrap">${SAVED_AVA}</span><div class="cr-main"><b>Избранное</b><span>Сообщения себе — никто их не увидит</span></div><div class="cr-side"></div></button>` : ""}${sorted.map((c, i) => {
       const n = chat.unread[c.id] || 0, last = chat.last[c.id];
       const who = c.kind === "direct" ? otherIn(c) : null;
       const muted = chat.muted.has(c.id);
       return `<a class="chat-row${n ? " unread" : ""}${muted ? " muted" : ""}${c.id === activeId ? " active" : ""}" href="#/chat/${c.id}" style="--i:${Math.min(i, 20)}">
         <span class="ava-wrap${who && chat.online.has(who) ? " is-online" : ""}" ${who ? `data-online-user="${who}"` : ""}>${chatAvatar(c)}</span>
-        <div class="cr-main"><b>${esc(chatTitle(c))}${muted ? ` <i class="cr-mute" title="Уведомления выключены">🔕</i>` : ""}</b><span>${esc(preview(last))}</span></div>
-        <div class="cr-side">${last ? `<time>${last.author === me() ? listTick(c.id, last) : ""}${shortTime(last.created_at)}</time>` : ""}${n ? `<i class="cr-badge">${n > 99 ? "99+" : n}</i>` : ""}</div>
+        <div class="cr-main"><b>${esc(chatTitle(c))}${muted ? ` <i class="cr-mute" title="Уведомления выключены">🔕</i>` : ""}</b><span>${previewHtml(last)}</span></div>
+        <div class="cr-side">${last ? `<time>${last.author === me() && c.kind !== "saved" ? listTick(c.id, last) : ""}${shortTime(last.created_at)}</time>` : ""}${n ? `<i class="cr-badge">${n > 99 ? "99+" : n}</i>` : ""}</div>
       </a>`;
     }).join("")}</div>`;
 }
@@ -385,14 +431,16 @@ async function viewChat(id) {
       <div class="chat-bg" aria-hidden="true"><i></i><i></i><i></i></div>
       <header class="chat-head">
         <a href="#/chats" class="btn back" aria-label="Ко всем чатам">←</a>
-        ${c.kind === "direct" ? `<a href="#/p/${otherIn(c)}" class="ch-who">` : `<div class="ch-who" role="button" tabindex="0" data-members title="Участники и кто в сети">`}
+        ${c.kind === "direct" ? `<a href="#/p/${otherIn(c)}" class="ch-who">` : c.kind === "saved" ? `<div class="ch-who">` : `<div class="ch-who" role="button" tabindex="0" data-members title="Участники и кто в сети">`}
           <span class="ava-wrap" ${c.kind === "direct" ? `data-online-user="${otherIn(c)}"` : ""}>${chatAvatar(c)}</span>
           <div><b>${esc(chatTitle(c))}</b><span id="chSub">${esc(chatSubtitle(c))}</span></div>
         ${c.kind === "direct" ? `</a>` : `</div>`}
-        <button type="button" class="btn icon-btn" data-mute aria-pressed="${chat.muted.has(c.id)}" aria-label="Уведомления из этого чата" title="Уведомления из этого чата">${chat.muted.has(c.id) ? "🔕" : "🔔"}</button>
+        ${c.kind === "saved" ? "" : `<button type="button" class="btn icon-btn" data-mute aria-pressed="${chat.muted.has(c.id)}" aria-label="Уведомления из этого чата" title="Уведомления из этого чата">${chat.muted.has(c.id) ? "🔕" : "🔔"}</button>`}
         <button type="button" class="btn icon-btn" data-csearch aria-label="Поиск по переписке" title="Поиск">🔍</button>
         ${c.kind === "group" ? `<button type="button" class="btn" data-addppl>+ Люди</button>${state.v132 ? `<button type="button" class="btn icon-btn" data-gmanage aria-label="Настройки группы" title="Настройки группы">⋯</button>` : ""}` : ""}
       </header>
+      <div class="selbar" id="selbar" hidden></div>
+      <div class="vbar" id="vbar" hidden></div>
       <div class="add-ppl" id="addPpl" hidden></div>
       <div class="c-search" id="cSearch" hidden></div>
       <div class="pin-bar" id="pinBar" hidden></div>
@@ -408,8 +456,8 @@ async function viewChat(id) {
           <div class="attach-wrap">
             <button type="button" class="attach" id="attach" aria-label="Прикрепить">${CLIP_ICON}</button>
             <div class="attach-menu" id="attachMenu" hidden>
-              <button type="button" data-attach="photo">📷 Фото или видео</button>
-              <button type="button" data-attach="poll">📊 Опрос</button>
+              <button type="button" data-attach="photo"><span class="am-ic pk">${ATT_IMG}</span><span class="am-t"><b>Галерея</b><small>фото и видео, можно несколько</small></span></button>
+              <button type="button" data-attach="poll"><span class="am-ic cy">${ATT_POLL}</span><span class="am-t"><b>Опрос</b><small>открытый или анонимный</small></span></button>
             </div>
           </div>
           <input type="file" id="chatFile" accept="image/*,video/*" multiple hidden>
@@ -434,19 +482,23 @@ async function viewChat(id) {
   wireEdgeBack();
   paintTicks();
   paintPresence();
+  paintSelection();
+  paintVbar();
   markRead(id);
 }
 
 // Цвет фона переписки: в личке — неон собеседника (тот, что он выбрал в профиле),
 // в общем чате — розовый с голубым, как весь сайт, в группах — фиолетовый
 function chatTheme(c) {
-  const n = c.kind === "direct" ? colorOf(otherIn(c)) : c.kind === "group" ? NEON.violet : { a: "#ff4fd8", b: "#3ee6ff" };
+  const n = c.kind === "direct" ? colorOf(otherIn(c)) : c.kind === "group" ? NEON.violet : c.kind === "saved" ? { a: "#3ee6ff", b: "#9b7bff" } : { a: "#ff4fd8", b: "#3ee6ff" };
   return `--ca:${n.a};--cb:${n.b}`;
 }
 
 function chatLeave() {
   // Ушли из чата во время записи голосового — запись выбрасываем и выключаем микрофон
   if (rec) stopRecording(false);
+  closeVoice();
+  chat.sel?.clear();
   stopTyping();
   closeMembers(true);
   chat.open = null; chat.replyTo = null; chat.editing = null;
@@ -479,8 +531,64 @@ const linkify = s => s.replace(/(https?:\/\/[^\s<]+)/g, u => {
     }
     return `<a href="${esc(hash)}">${u}</a>`;
   }
-  return `<a href="${u}" target="_blank" rel="noopener">${u}</a>`;
+  return `<a href="${u}" target="_blank" rel="noopener" title="${u}">${esc(shortUrl(raw))}</a>`;
 });
+// Длинный адрес показываем коротко: сайт и начало пути (правка 9Б). Полный — в подсказке и по нажатию
+function shortUrl(raw) {
+  try {
+    const u = new URL(raw);
+    const s = u.hostname.replace(/^www\./, "") + (u.pathname === "/" ? "" : decodeURI(u.pathname)) + (u.search ? "?…" : "");
+    return s.length > 48 ? s.slice(0, 46) + "…" : s;
+  } catch (e) { return raw.length > 48 ? raw.slice(0, 46) + "…" : raw; }
+}
+// Первая внешняя ссылка в тексте — для неё карточка с картинкой
+function extLink(text) {
+  const m = (text || "").match(/https?:\/\/[^\s<]+/g) || [];
+  return m.map(x => x.replace(/[.,!?;:)»"']+$/, "")).find(x => !x.startsWith(siteBase())) || null;
+}
+
+// ---------- Карточка ссылки: картинка слева, сайт, заголовок, описание (9Б) ----------
+// Данные страницы достаёт функция link-preview, ответы запоминаются на устройстве на неделю
+const LP_KEY = "korefany-lp", LP_DAYS = 7;
+const lpMem = new Map();
+let lpStore = null, lpOff = 0;
+function lpCache() {
+  if (lpStore) return lpStore;
+  try { lpStore = JSON.parse(localStorage.getItem(LP_KEY) || "{}"); } catch (e) { lpStore = {}; }
+  const old = Date.now() - LP_DAYS * 864e5;
+  for (const k in lpStore) if (lpStore[k].t < old) delete lpStore[k];
+  return lpStore;
+}
+function lpSave(u, d) {
+  const c = lpCache(); c[u] = { t: Date.now(), d };
+  const keys = Object.keys(c); if (keys.length > 300) keys.sort((a, b) => c[a].t - c[b].t).slice(0, keys.length - 300).forEach(k => delete c[k]);
+  try { localStorage.setItem(LP_KEY, JSON.stringify(c)); } catch (e) {}
+}
+function lpGet(u) {
+  const hit = lpCache()[u]; if (hit) return Promise.resolve(hit.d);
+  if (Date.now() < lpOff) return Promise.resolve(null);   // функция ещё не выложена или лежит — не долбим её
+  if (!lpMem.has(u)) lpMem.set(u, sb.functions.invoke("link-preview", { body: { url: u } }).then(({ data, error }) => {
+    if (error) { if (error.context?.status === 404 || /not found|failed to send/i.test(error.message || "")) lpOff = Date.now() + 10 * 60e3; lpMem.delete(u); return null; }
+    const d = data?.ok ? { site: data.site, title: data.title, description: data.description, image: data.image } : { none: true };
+    lpSave(u, d); return d;
+  }).catch(() => { lpMem.delete(u); return null; }));
+  return lpMem.get(u);
+}
+function hydrateLinks() {
+  if (state.offline) return;
+  document.querySelectorAll("[data-lp]:not([data-lp-on])").forEach(el => {
+    el.dataset.lpOn = "1";
+    lpGet(el.dataset.lp).then(d => {
+      if (!el.isConnected || !d || d.none || !(d.title || d.image)) return;
+      el.innerHTML = `${d.image ? `<span class="lp-img"><img src="${esc(d.image)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></span>` : ""}
+        <span class="lp-tx"><small>${esc(d.site || "")}</small>${d.title ? `<b>${esc(d.title)}</b>` : ""}${d.description ? `<i>${esc(d.description)}</i>` : ""}</span>`;
+      el.hidden = false;
+    });
+  });
+}
+let lpScan = 0;
+new MutationObserver(() => { clearTimeout(lpScan); lpScan = setTimeout(hydrateLinks, 120); })
+  .observe(document.documentElement, { childList: true, subtree: true });
 
 // Сообщения подряд от одного человека в пределах 5 минут склеиваются в один блок
 const sameRunAs = (a, b) => a && b && a.author === b.author &&
@@ -557,25 +665,40 @@ async function hydrateLottie() {
     const it = lottieItem(e.target);
     if (!it || !e.isIntersecting || it.played) return;
     it.played = true; lottieIO.unobserve(it.el);
-    if (!still) it.anim.goToAndPlay(0, true);
+    if (!still) playLottie(it);
   }));
   for (const el of els) {
     lottieData(el.dataset.lottie).then(txt => {
       if (!el.isConnected) return;
       const box = document.createElement("span"); box.className = "je-anim";
       el.appendChild(box);
-      const anim = lottie.loadAnimation({ container: box, renderer: "svg", loop: false, autoplay: false, animationData: JSON.parse(txt) });
-      anim.addEventListener("DOMLoaded", () => { el.classList.add("lot-on"); anim.goToAndStop(0, true); });
-      lottieLive.add({ el, anim, played: false }); lottieIO.observe(el);
+      const data = JSON.parse(txt), rest = lottieRest(data);
+      const anim = lottie.loadAnimation({ container: box, renderer: "svg", loop: false, autoplay: false, animationData: data });
+      // До проигрывания и после него эмодзи стоит в своей «правильной» позе — кадр с меткой rest
+      anim.addEventListener("DOMLoaded", () => { el.classList.add("lot-on"); anim.goToAndStop(rest, true); });
+      anim.addEventListener("complete", () => anim.goToAndStop(rest, true));
+      lottieLive.add({ el, anim, rest, played: false }); lottieIO.observe(el);
     }).catch(() => lottieJson.delete(el.dataset.lottie));
   }
 }
 const lottieItem = el => { for (const it of lottieLive) if (it.el === el) return it; };
+// У анимаций Noto есть метка rest — кадр, где эмодзи выглядит как обычный. Раньше анимация замирала
+// на последнем кадре, а он у многих посреди движения (😋 с высунутым языком)
+function lottieRest(data) {
+  const end = Math.max(0, (data.op || 0) - (data.ip || 0) - 1);
+  const m = (data.markers || []).find(x => x.cm === "rest" && x.tm >= 0 && x.tm <= end);
+  return m ? Math.round(m.tm) : 0;
+}
+// Проигрываем с начала до позы rest (если она в середине — дальше не идём, чтобы не было рывка назад)
+function playLottie(it) {
+  if (it.rest > 0) it.anim.playSegments([0, it.rest], true);
+  else it.anim.goToAndPlay(0, true);
+}
 // Нажатие на анимированный эмодзи — проиграть ещё раз (меню сообщения при этом не открывается, оно по долгому нажатию)
 function replayLottie(el) {
   const it = lottieItem(el); if (!it) return false;
   it.played = true; lottieIO?.unobserve(el);
-  it.anim.goToAndPlay(0, true);
+  playLottie(it);
   return true;
 }
 new MutationObserver(() => { clearTimeout(lottieScan); lottieScan = setTimeout(hydrateLottie, 60); })
@@ -590,7 +713,7 @@ function msgHtml(m, prev, c, isNew = false, next = null) {
   const showWho = !mine && c.kind !== "direct";
   const head = showWho && !sameRun;
   const jumbo = !m.image_path && !m.video_path && !m.reply_to && !m.audio_path && !m.poll && !m.forwarded_from && isJumbo(m.text);
-  const meta = `${m.edited_at ? `<span class="m-edited" title="Изменено">изм.</span>` : ""}<time>${timeText(m.created_at)}</time>${mine ? `<i class="tick" data-tick="${m.id}">✓</i>` : ""}`;
+  const meta = `${m.edited_at ? `<span class="m-edited" title="Изменено">изм.</span>` : ""}<time>${timeText(m.created_at)}</time>${mine && c.kind !== "saved" ? `<i class="tick" data-tick="${m.id}">✓</i>` : ""}`;
   const orig = m.reply_to ? chat.messages.find(x => x.id === m.reply_to) : null;
   return `${newDay ? `<div class="day-sep"><span>${dateLabel(m.created_at)}</span></div>` : ""}
   ${m.id === chat.firstUnread ? `<div class="new-sep" id="newSep"><span>Новые сообщения</span></div>` : ""}
@@ -607,7 +730,9 @@ function msgHtml(m, prev, c, isNew = false, next = null) {
         ${m.video_path ? `<video class="m-vid" src="${chatUrl(m.video_path)}" controls playsinline preload="metadata"></video>` : ""}
         ${m.audio_path ? voiceHtml(m) : ""}
         ${Array.isArray(m.poll?.options) ? `<div class="poll" data-poll="${m.id}">${pollInner(m)}</div>` : ""}
-        ${m.text ? `<p class="m-text">${jumbo ? jumboHtml(m.text) : linkify(esc(m.text))}<span class="m-meta">${meta}</span></p>`
+        ${m.text && !jumbo && extLink(m.text) ? `<p class="m-text">${linkify(esc(m.text))}</p>
+          <a class="lp-card" data-lp="${esc(extLink(m.text))}" href="${esc(extLink(m.text))}" target="_blank" rel="noopener" hidden></a><span class="m-meta m-meta-block">${meta}</span>`
+          : m.text ? `<p class="m-text">${jumbo ? jumboHtml(m.text) : linkify(esc(m.text))}<span class="m-meta">${meta}</span></p>`
           : (m.image_path || m.video_path) && !m.audio_path && !m.poll ? `<span class="m-meta on-img">${meta}</span>`
           : `<span class="m-meta m-meta-block">${meta}</span>`}
       </div>
@@ -648,6 +773,49 @@ function paintMsgReacts(id) {
 
 // ---------- Отправка ----------
 
+// Фото и видео из скрепки, перетаскивания мышкой или вставки (Ctrl+V)
+async function sendFileList(c, list) {
+  const media = list.filter(f => /^(image|video)\//.test(f.type) || /\.(heic|heif)$/i.test(f.name));
+  if (list.length && !media.length) return toast("Можно отправить только фото и видео");
+  if (media.length < list.length) toast("Отправляю только фото и видео, остальные файлы пропущены");
+  const pics = media.filter(f => !f.type.startsWith("video/")), vids = media.filter(f => f.type.startsWith("video/"));
+  for (let i = 0; i < pics.length; i += 10) {
+    const part = pics.slice(i, i + 10);
+    await sendMessage(c, part.length === 1 ? { file: part[0] } : { files: part });
+  }
+  for (const v of vids) {
+    if (v.size > KOREFANY.maxVideoMb * 1048576) { toast(`Видео больше ${KOREFANY.maxVideoMb} МБ — обрежь его в галерее телефона`); continue; }
+    await sendMessage(c, { video: v });
+  }
+}
+// Перетащил файлы мышкой на переписку — отпустил — ушли. Подсказка поверх чата, пока тащишь
+function wireChatDrop(c) {
+  const main = document.querySelector(".chat-main"); if (!main || main.dataset.drop) return;
+  main.dataset.drop = "1";
+  let depth = 0;
+  const hasFiles = e => [...(e.dataTransfer?.types || [])].includes("Files");
+  const show = on => {
+    let ov = main.querySelector(".drop-ov");
+    if (on && !ov) { main.insertAdjacentHTML("beforeend", `<div class="drop-ov"><div><b>Отпусти, чтобы отправить</b><span>фото и видео уйдут в этот чат</span></div></div>`); }
+    if (!on) ov?.remove();
+  };
+  main.addEventListener("dragenter", e => { if (!hasFiles(e)) return; e.preventDefault(); depth++; show(true); });
+  main.addEventListener("dragover", e => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
+  main.addEventListener("dragleave", e => { if (!hasFiles(e)) return; if (--depth <= 0) { depth = 0; show(false); } });
+  main.addEventListener("drop", e => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); depth = 0; show(false);
+    if (chat.editing) return toast("Сначала закончи редактирование");
+    sendFileList(c, [...e.dataTransfer.files]);
+  });
+  // Вставка картинки из буфера (скриншот — Ctrl+V в поле)
+  main.querySelector("textarea")?.addEventListener("paste", e => {
+    const files = [...(e.clipboardData?.files || [])].filter(f => /^(image|video)\//.test(f.type));
+    if (!files.length) return;
+    e.preventDefault(); sendFileList(c, files);
+  });
+}
+
 function wireComposer(c) {
   const form = document.getElementById("composer");
   const ta = form.querySelector("textarea"), send = document.getElementById("sendBtn");
@@ -679,18 +847,8 @@ function wireComposer(c) {
   menu.querySelector('[data-attach="photo"]').onclick = () => { menu.hidden = true; file.click(); };
   menu.querySelector('[data-attach="poll"]').onclick = () => { menu.hidden = true; openPollForm(c); };
   // Можно выбрать сразу много: фото уходят одним сообщением-сеткой (до 10), каждое видео — отдельным
-  file.onchange = async () => {
-    const list = [...file.files]; file.value = "";
-    const pics = list.filter(f => !f.type.startsWith("video/")), vids = list.filter(f => f.type.startsWith("video/"));
-    for (let i = 0; i < pics.length; i += 10) {
-      const part = pics.slice(i, i + 10);
-      await sendMessage(c, part.length === 1 ? { file: part[0] } : { files: part });
-    }
-    for (const v of vids) {
-      if (v.size > KOREFANY.maxVideoMb * 1048576) { toast(`Видео больше ${KOREFANY.maxVideoMb} МБ — обрежь его в галерее телефона`); continue; }
-      await sendMessage(c, { video: v });
-    }
-  };
+  file.onchange = () => { const list = [...file.files]; file.value = ""; sendFileList(c, list); };
+  wireChatDrop(c);
 
   wireVoice(c, send);
   document.getElementById("recCancel").onclick = () => { stopRecording(false); toast("Голосовое отменено"); };
@@ -883,6 +1041,59 @@ const VOICE_ICONS = `<svg class="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13a
   `<svg class="i-pause" viewBox="0 0 24 24"><rect x="6.5" y="5" width="4" height="14" rx="1.2"/><rect x="13.5" y="5" width="4" height="14" rx="1.2"/></svg>`;
 const voicePlayer = new Audio();
 let voicePlaying = null;
+// Скорость голосовых: ×1 → ×1.5 → ×2 по кругу, запоминается на устройстве
+const V_SPEEDS = [1, 1.5, 2];
+let voiceSpeed = (() => { try { const v = Number(localStorage.getItem("korefany-vspeed")); return V_SPEEDS.includes(v) ? v : 1; } catch (e) { return 1; } })();
+const setRate = () => { voicePlayer.defaultPlaybackRate = voiceSpeed; voicePlayer.playbackRate = voiceSpeed; };
+const mmss = t => { t = Math.max(0, Math.floor(t || 0)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, "0")}`; };
+// Полоса плеера под шапкой чата (как в ВК): видна, пока голосовое играет или стоит на паузе
+function paintVbar() {
+  const bar = document.getElementById("vbar"); if (!bar) return;
+  const m = voicePlaying && chat.messages.find(x => x.id === voicePlaying);
+  if (!m) { bar.hidden = true; bar.innerHTML = ""; return; }
+  if (bar.dataset.mid !== m.id || !bar.innerHTML) {
+    bar.dataset.mid = m.id;
+    bar.innerHTML = `<div class="vb-row">
+      <button type="button" class="vb-play" data-vb-toggle aria-label="Пауза">${VOICE_ICONS}</button>
+      <button type="button" class="vb-who" data-vb-jump><b>${esc(nameOf(m.author))}</b><span>голосовое · ${esc(dateLabel(m.created_at).toLowerCase())} в ${timeText(m.created_at)}</span></button>
+      <span class="vb-time" id="vbTime"></span>
+      <button type="button" class="vb-speed" data-vb-speed aria-label="Скорость">×${voiceSpeed}</button>
+      <button type="button" class="vb-close" data-vb-close aria-label="Закрыть плеер"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div><div class="vb-prog" data-vb-seek><i id="vbFill"></i></div>`;
+  }
+  bar.hidden = false;
+  bar.classList.toggle("playing", !voicePlayer.paused);
+  bar.querySelector("[data-vb-toggle]").setAttribute("aria-label", voicePlayer.paused ? "Слушать" : "Пауза");
+  bar.querySelector("[data-vb-speed]").textContent = `×${voiceSpeed}`;
+  const len = voiceLength(), cur = voicePlayer.currentTime || 0;
+  document.getElementById("vbTime").textContent = `${mmss(cur)} / ${mmss(len)}`;
+  document.getElementById("vbFill").style.width = len ? `${Math.min(100, cur / len * 100)}%` : "0%";
+}
+// ✕ в полосе: остановить и убрать плеер
+function closeVoice() {
+  if (!voicePlaying) return;
+  const el = document.querySelector(`[data-voice="${voicePlaying}"]`), m = chat.messages.find(x => x.id === voicePlaying);
+  voicePlayer.pause();
+  if (el) { el.classList.remove("playing"); el.querySelectorAll(".v-wave i.on").forEach(b => b.classList.remove("on")); el.querySelector(".v-time").textContent = mmss(Math.round(m?.audio_duration || 0)); }
+  voicePlaying = null;
+  try { navigator.mediaSession.metadata = null; } catch (e) {}
+  voicePlayer.removeAttribute("src"); voicePlayer.load();
+  paintVbar();
+}
+document.addEventListener("click", e => {
+  if (!e.target.closest("#vbar")) return;
+  if (e.target.closest("[data-vb-toggle]")) return voicePlaying && toggleVoice(voicePlaying);
+  if (e.target.closest("[data-vb-close]")) return closeVoice();
+  if (e.target.closest("[data-vb-speed]")) {
+    voiceSpeed = V_SPEEDS[(V_SPEEDS.indexOf(voiceSpeed) + 1) % V_SPEEDS.length];
+    try { localStorage.setItem("korefany-vspeed", voiceSpeed); } catch (er) {}
+    setRate(); return paintVbar();
+  }
+  const sk = e.target.closest("[data-vb-seek]");
+  if (sk && voicePlaying) { const r = sk.getBoundingClientRect(); return toggleVoice(voicePlaying, Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))); }
+  if (e.target.closest("[data-vb-jump]") && voicePlaying) document.querySelector(`[data-mid="${voicePlaying}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+});
+["play", "pause"].forEach(ev => voicePlayer.addEventListener(ev, paintVbar));
 function voiceHtml(m) {
   let h = 0; for (const ch of m.id) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
   const bars = Array.from({ length: 30 }, (_, i) => { h = (h * 1103515245 + 12345) >>> 0; return 25 + (h % 75); });
@@ -909,6 +1120,7 @@ function toggleVoice(id, seekFrac = null) {
     }
     document.querySelectorAll(".voice.playing").forEach(v => { v.classList.remove("playing"); v.querySelectorAll(".v-wave i.on").forEach(b => b.classList.remove("on")); });
     voicePlayer.src = chatUrl(m.audio_path);
+    setRate();
     voicePlaying = id;
     // Пока слушаешь голосовое, iPhone показывает плеер — пусть там будет понятно, что играет
     try { if (window.MediaMetadata) navigator.mediaSession.metadata = new MediaMetadata({ title: `Голосовое · ${nameOf(m.author)}`, artist: "Корефаны" }); } catch (e) {}
@@ -922,7 +1134,7 @@ function toggleVoice(id, seekFrac = null) {
       toast(err?.name === "NotAllowedError" ? "Телефон не дал включить звук — нажми ещё раз"
         : err?.name === "NotSupportedError" ? "Этот телефон не умеет такой формат голосового"
         : "Не получилось воспроизвести");
-      el?.classList.remove("playing"); voicePlaying = null;
+      el?.classList.remove("playing"); voicePlaying = null; paintVbar();
     });
     el?.classList.add("playing");
   } else {
@@ -942,7 +1154,7 @@ voicePlayer.addEventListener("error", () => {
   if (!voicePlaying) return;
   const el = document.querySelector(`[data-voice="${voicePlaying}"]`);
   el?.classList.remove("playing");
-  voicePlaying = null;
+  voicePlaying = null; paintVbar();
   toast("Голосовое не открылось. Если записано на Android, а слушаешь на iPhone, — дело в формате");
 });
 
@@ -964,6 +1176,7 @@ voicePlayer.addEventListener("timeupdate", () => {
   bars.forEach((b, i) => b.classList.toggle("on", i < lit));
   const left = Math.max(0, Math.ceil(len - voicePlayer.currentTime));
   el.querySelector(".v-time").textContent = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}`;
+  paintVbar();
 });
 voicePlayer.addEventListener("ended", () => {
   const el = voicePlaying && document.querySelector(`[data-voice="${voicePlaying}"]`);
@@ -974,6 +1187,7 @@ voicePlayer.addEventListener("ended", () => {
   // Дослушали — отпускаем плеер, чтобы iPhone убрал «Корефаны» с экрана блокировки
   try { navigator.mediaSession.metadata = null; } catch (e) {}
   voicePlayer.removeAttribute("src"); voicePlayer.load();
+  paintVbar();
 });
 
 // ---------- Опросы ----------
@@ -987,6 +1201,7 @@ function openPollForm(c) {
       <input type="text" class="pf-opt" maxlength="60" placeholder="Вариант 1">
       <input type="text" class="pf-opt" maxlength="60" placeholder="Вариант 2">
     </div>
+    <label class="toggle pf-anon"><input type="checkbox" id="pfAnon"><span>Анонимный — никто не увидит, кто за что голосовал</span></label>
     <div class="row">
       <button type="button" class="btn" data-pf-add>+ Вариант</button>
       <button type="button" class="btn primary" data-pf-send>Отправить опрос</button>
@@ -1007,23 +1222,39 @@ function openPollForm(c) {
     const err = document.getElementById("pfMsg");
     if (!question) { err.textContent = "Напиши вопрос"; return; }
     if (options.length < 2) { err.textContent = "Нужно хотя бы два варианта"; return; }
+    const anonymous = !!document.getElementById("pfAnon")?.checked;
     box.hidden = true; box.innerHTML = "";
-    await sendMessage(c, { poll: { question, options } });
+    await sendMessage(c, { poll: { question, options, anonymous } });
   };
 }
 
+// Старые опросы (без поля anonymous) были анонимными — такими и остаются
+const pollAnon = m => m.poll?.anonymous !== false;
 function pollInner(m) {
   const votes = (chat.votes || []).filter(v => v.message_id === m.id);
   const total = votes.length;
   const mineV = votes.find(v => v.user_id === me());
+  const open = !pollAnon(m);
   return `<b class="p-q">📊 ${esc(m.poll.question)}</b>
     ${m.poll.options.map((o, i) => {
-      const n = votes.filter(v => v.option === i).length;
+      const who = votes.filter(v => v.option === i);
+      const n = who.length;
       const pct = total ? Math.round(n / total * 100) : 0;
+      const faces = open && n ? `<span class="p-who" title="${esc(who.map(v => nameOf(v.user_id)).join(", "))}">${who.slice(0, 5).map(v => avatar(v.user_id)).join("")}${n > 5 ? `<b>+${n - 5}</b>` : ""}</span>` : "";
       return `<button type="button" class="p-opt${mineV?.option === i ? " chosen" : ""}" data-pvote="${m.id}" data-opt="${i}" style="--pct:${pct}%">
-        <span>${mineV?.option === i ? "✓ " : ""}${esc(o)}</span><i>${total ? pct + "%" : ""}</i></button>`;
+        <span>${mineV?.option === i ? "✓ " : ""}${esc(o)}</span>${faces}<i>${total ? pct + "%" : ""}</i></button>`;
     }).join("")}
-    <span class="p-total">${total ? `${total} ${plural(total, ["голос", "голоса", "голосов"])}` : "Пока никто не голосовал"}</span>`;
+    <span class="p-total">${total ? `${total} ${plural(total, ["голос", "голоса", "голосов"])}` : "Пока никто не голосовал"} · ${open ? `<a href="#" data-poll-who="${m.id}">кто голосовал</a>` : "анонимно"}</span>`;
+}
+// Открытый опрос: шторка со списком, кто за какой вариант
+function openPollVoters(id) {
+  const m = chat.messages.find(x => x.id === id); if (!m?.poll || pollAnon(m)) return;
+  const votes = (chat.votes || []).filter(v => v.message_id === id);
+  openSheet(`<div class="gs-h"><h3>${esc(m.poll.question)}</h3></div>
+    <div class="pvl">${m.poll.options.map((o, i) => {
+      const who = votes.filter(v => v.option === i);
+      return `<section><h4>${esc(o)} <small>${who.length}</small></h4>${who.length ? who.map(v => `<a class="pvl-row" href="#/p/${v.user_id}">${avatar(v.user_id)}<span>${esc(nameOf(v.user_id))}</span></a>`).join("") : `<p class="msg">Никто</p>`}</section>`;
+    }).join("")}</div>`, "Кто голосовал");
 }
 function paintPoll(id) {
   const m = chat.messages.find(x => x.id === id), el = document.querySelector(`[data-poll="${id}"]`);
@@ -1507,24 +1738,29 @@ function openEmojiPicker(id, bubble) {
 // ---------- Переслать сообщение в другой чат ----------
 // Фото, видео и голосовое копируются в папку того чата (функция files, команда copy): у каждого чата свои права доступа
 function openForward(m) {
-  if (!m) return;
+  const msgs = (Array.isArray(m) ? m : [m]).filter(Boolean);
+  if (!msgs.length) return;
+  m = msgs[0];
   const list = chat.list.slice().sort((a, b) => (chat.last[b.id]?.created_at || "").localeCompare(chat.last[a.id]?.created_at || ""));
   const w = openSheet(`<div class="gs-h"><h3>Переслать</h3></div>
-    <p class="msg">${esc(msgSummary(m)).slice(0, 120)}</p>
+    <p class="msg">${msgs.length > 1 ? `${msgs.length} ${plural(msgs.length, ["сообщение", "сообщения", "сообщений"])}` : esc(msgSummary(m)).slice(0, 120)}</p>
     <div class="share-chats">${list.map(c => `<button type="button" class="share-chat" data-fwd-to="${c.id}"><span class="ava-wrap">${chatAvatar(c)}</span><b>${esc(chatTitle(c))}</b></button>`).join("")}</div>`, "Переслать");
   w.querySelectorAll("[data-fwd-to]").forEach(b => b.onclick = async () => {
     b.disabled = true;
     try {
       const to = b.dataset.fwdTo;
       const copy = async pth => pth ? (await filesApi({ op: "copy", from: pth, to_chat: to })).path : null;
-      const row = { chat_id: to, text: m.text || null, forwarded_from: m.forwarded_from || m.author };
-      if (m.images?.length > 1) { row.images = []; for (const x of m.images) row.images.push(await copy(x)); row.image_path = row.images[0]; }
-      else if (m.image_path) row.image_path = await copy(m.image_path);
-      if (m.video_path) row.video_path = await copy(m.video_path);
-      if (m.audio_path) Object.assign(row, { audio_path: await copy(m.audio_path), audio_duration: m.audio_duration });
-      if (m.poll) row.poll = m.poll;
-      const { error } = await sb.from("messages").insert(row);
-      if (error) throw error;
+      // Несколько — по одному, в том порядке, как они шли в переписке
+      for (const m of msgs) {
+        const row = { chat_id: to, text: m.text || null, forwarded_from: m.forwarded_from || m.author };
+        if (m.images?.length > 1) { row.images = []; for (const x of m.images) row.images.push(await copy(x)); row.image_path = row.images[0]; }
+        else if (m.image_path) row.image_path = await copy(m.image_path);
+        if (m.video_path) row.video_path = await copy(m.video_path);
+        if (m.audio_path) Object.assign(row, { audio_path: await copy(m.audio_path), audio_duration: m.audio_duration });
+        if (m.poll) row.poll = m.poll;
+        const { error } = await sb.from("messages").insert(row);
+        if (error) throw error;
+      }
       closeGallerySheet();
       toast(`Переслано в «${chatTitle(chat.list.find(c => c.id === to))}»`, to === chat.open ? "" : "Открыть", () => { location.hash = "#/chat/" + to; });
     } catch (err) { b.disabled = false; toast("Не получилось переслать: " + (err.message || err)); }
@@ -1569,6 +1805,7 @@ function openGroupManage() {
 
 document.addEventListener("click", async e => {
   const dm = e.target.closest("[data-dm]"); if (dm) return openDirect(dm.dataset.dm);
+  if (e.target.closest("[data-open-saved]")) return openSaved();
   const panel = e.target.closest("[data-panel]");
   if (panel) { chat.panel = chat.panel === panel.dataset.panel ? null : panel.dataset.panel; return refreshChatSide(true); }
   if (!chat.open) return;
@@ -1598,6 +1835,7 @@ document.addEventListener("click", async e => {
   const vs = e.target.closest("[data-vseek]");
   if (vs) { const r = vs.getBoundingClientRect(); return toggleVoice(vs.dataset.vseek, Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))); }
   // Опросы
+  const pw = e.target.closest("[data-poll-who]"); if (pw) { e.preventDefault(); return openPollVoters(pw.dataset.pollWho); }
   const pv = e.target.closest("[data-pvote]"); if (pv) return votePoll(pv.dataset.pvote, Number(pv.dataset.opt));
   // Закреплённое: нажал — перейти к сообщению, ✕ — открепить
   const pj = e.target.closest("[data-pin-jump]");
@@ -1637,12 +1875,64 @@ document.addEventListener("click", async e => {
   // Сразу после долгого нажатия браузер присылает ещё и обычное нажатие — его пропускаем, иначе меню тут же закроется
   if (Date.now() - longPressAt < 600) return;
   const lot = e.target.closest(".je-lottie.lot-on");
-  if (lot && !document.querySelector(".msg.active") && replayLottie(lot)) return;
-  // Нажатие на пузырь показывает реакции и «Ответить»
+  if (lot && !chat.sel.size && !document.querySelector(".msg.active") && replayLottie(lot)) return;
   const bubble = e.target.closest("[data-bubble]");
+  // Компьютер: левый клик выделяет сообщение (правка 18А), меню — правым кликом (contextmenu ниже)
+  if (MOUSE.matches) {
+    document.querySelectorAll(".msg.active").forEach(x => x.classList.remove("active")); syncActive();
+    if (bubble && (chat.sel.size || !e.target.closest("a"))) toggleSelect(bubble.closest(".msg")?.dataset.mid);
+    return;
+  }
+  // Телефон: нажатие на пузырь показывает реакции и «Ответить»
   document.querySelectorAll(".msg.active").forEach(x => { if (!bubble || x !== bubble.closest(".msg")) x.classList.remove("active"); });
   if (bubble && !e.target.closest("a")) openMsgMenu(bubble, true);
   syncActive();
+});
+
+// ---------- Выделение сообщений мышкой (18А) ----------
+// Левый клик — выделить (можно несколько), сверху вместо шапки панель «Выбрано: N · Ответить · Переслать».
+// Правый клик — прежнее меню: реакции, копировать, изменить, удалить. На телефоне всё как раньше
+const MOUSE = matchMedia("(hover: hover) and (pointer: fine)");
+chat.sel = new Set();
+function toggleSelect(id) {
+  const m = id && chat.messages.find(x => x.id === id);
+  if (!m || m.pending) return;
+  if (chat.sel.has(id)) chat.sel.delete(id); else chat.sel.add(id);
+  paintSelection();
+}
+function clearSelection() { if (!chat.sel.size) return; chat.sel.clear(); paintSelection(); }
+function paintSelection() {
+  // Удалённые и ушедшие со страницы сообщения из выбора выкидываем
+  for (const id of chat.sel) if (!chat.messages.some(x => x.id === id)) chat.sel.delete(id);
+  const n = chat.sel.size;
+  document.querySelectorAll(".msgs-in .msg").forEach(x => x.classList.toggle("selected", chat.sel.has(x.dataset.mid)));
+  document.getElementById("msgs")?.classList.toggle("selecting", n > 0);
+  const bar = document.getElementById("selbar"); if (!bar) return;
+  bar.hidden = !n;
+  if (!n) return;
+  bar.innerHTML = `<button type="button" class="sb-x" data-sel-clear aria-label="Снять выделение"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    <b>Выбрано: ${n}</b>
+    <button type="button" class="sb-btn" data-sel-reply ${n === 1 ? "" : "disabled title=\"Ответить можно на одно сообщение\""}>${SB_REPLY}<span>Ответить</span></button>
+    <button type="button" class="sb-btn primary" data-sel-fwd>${SB_FWD}<span>Переслать</span></button>`;
+}
+const SB_REPLY = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 8 5 12l5 4M5 12h9a5 5 0 0 1 5 5v1"/></svg>`;
+const SB_FWD = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 8l5 4-5 4M19 12h-9a5 5 0 0 0-5 5v1"/></svg>`;
+document.addEventListener("click", e => {
+  if (!e.target.closest("#selbar")) return;
+  if (e.target.closest("[data-sel-clear]")) return clearSelection();
+  const ids = chat.messages.filter(x => chat.sel.has(x.id));   // по порядку в переписке
+  if (e.target.closest("[data-sel-reply]") && ids.length === 1) { clearSelection(); return setReply(ids[0]); }
+  if (e.target.closest("[data-sel-fwd]") && ids.length) { openForward(ids); clearSelection(); }
+});
+// Правый клик по пузырю — меню сообщения
+document.addEventListener("contextmenu", e => {
+  if (!MOUSE.matches || !chat.open) return;
+  const bubble = e.target.closest(".msgs-in [data-bubble]"); if (!bubble) return;
+  if (e.target.closest("a") && !chat.sel.size) return;   // по ссылке — обычное меню браузера (открыть в новой вкладке)
+  e.preventDefault();
+  const msg = bubble.closest(".msg");
+  document.querySelectorAll(".msg.active").forEach(x => { if (x !== msg) x.classList.remove("active"); });
+  openMsgMenu(bubble);
 });
 
 // Меню сообщения: веер реакций, «Ответить», «Копировать»... toggle — нажатие ещё раз закрывает
@@ -1791,6 +2081,7 @@ document.addEventListener("keydown", e => {
   if (document.querySelector(".mem-wrap")) { closeMembers(); return; }
   const active = document.querySelector(".msgs-in .msg.active");
   if (active) { active.classList.remove("active"); syncActive(); return; }
+  if (chat.sel.size) { clearSelection(); return; }
   const search = document.getElementById("cSearch");
   if (search && !search.hidden) { toggleSearch(); return; }
   const poll = document.getElementById("pollForm");

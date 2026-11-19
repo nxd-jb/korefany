@@ -202,7 +202,6 @@ h2 { font-size: 13px; letter-spacing: .1em; text-transform: uppercase; color: va
 }
 .tile:hover { transform: translateY(-3px); box-shadow: 0 0 0 1px rgba(255, 79, 216, .5), 0 8px 30px rgba(255, 79, 216, .25); }
 .tile > img { width: 100%; height: auto; display: block; }
-.tile .play { position: absolute; right: 8px; top: 8px; background: rgba(0, 0, 0, .6); border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: 700; color: var(--accent-2); }
 /* Фото проявляются: появляются из прозрачности и лёгкого размытия, когда загрузятся */
 img.fade { opacity: 0; filter: blur(8px); transition: opacity .5s ease, filter .6s ease; }
 img.fade.loaded { opacity: 1; filter: none; }
@@ -605,8 +604,13 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 
 /* Скрепка и её меню */
 .attach-wrap { position: relative; flex: none; }
-.attach-menu { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 6; display: grid; gap: 2px; padding: 6px; min-width: 150px; border-radius: 14px; background: rgba(21, 17, 31, .97); border: 1px solid var(--accent); box-shadow: var(--glow); animation: pop-in .2s cubic-bezier(.2, 1.4, .4, 1) both; }
-.attach-menu button { text-align: left; border: 0; background: none; padding: 9px 12px; border-radius: 10px; font-weight: 600; cursor: pointer; }
+.attach-menu { position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 6; display: grid; gap: 2px; padding: 6px; width: max-content; min-width: 240px; border-radius: 16px; background: rgba(21, 17, 31, .97); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0, 0, 0, .55); animation: pop-in .2s cubic-bezier(.2, 1.4, .4, 1) both; transform-origin: bottom left; }
+.attach-menu button { display: flex; align-items: center; gap: 12px; text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 12px; cursor: pointer; color: var(--fg); font: inherit; }
+.am-ic { width: 36px; height: 36px; flex: none; border-radius: 50%; display: grid; place-items: center; color: #fff; }
+.am-ic svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.am-ic.pk { background: linear-gradient(135deg, #ff4fd8, #b04dff); box-shadow: 0 0 12px rgba(255, 79, 216, .5); }
+.am-ic.cy { background: linear-gradient(135deg, #3ee6ff, #3b8bff); box-shadow: 0 0 12px rgba(62, 230, 255, .45); }
+.am-t { display: grid; line-height: 1.25; } .am-t b { font-size: 15px; } .am-t small { font-size: 12px; color: var(--muted); }
 .attach-menu button:hover { background: var(--panel-2); }
 
 /* Кнопка-микрофон: зажми и говори */
@@ -662,6 +666,17 @@ body.chats-page main.wrap { padding-block: 4px 16px; gap: 0; animation: none; }
 .p-opt.chosen { border-color: #fff; box-shadow: 0 0 10px rgba(255, 255, 255, .35); }
 .p-opt i { font-style: normal; opacity: .85; font-variant-numeric: tabular-nums; }
 .p-total { font-size: 12px; opacity: .75; }
+.p-total a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.p-opt { align-items: center; }
+.p-who { display: inline-flex; align-items: center; margin-left: auto; margin-right: 8px; }
+.p-who .ava { width: 20px; height: 20px; font-size: 10px; margin-left: -6px; box-shadow: 0 0 0 2px rgba(21, 17, 31, .9); }
+.p-who .ava:first-child { margin-left: 0; }
+.p-who b { font-size: 11px; margin-left: 4px; opacity: .85; }
+.pf-anon { font-size: 14px; color: var(--muted); }
+.pvl { display: grid; gap: 14px; max-height: 60vh; overflow-y: auto; }
+.pvl h4 { margin: 0 0 6px; font-size: 14px; } .pvl h4 small { color: var(--muted); font-weight: 600; margin-left: 4px; }
+.pvl-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; color: var(--fg); text-decoration: none; }
+.pvl-row .ava { width: 32px; height: 32px; }
 .m-meta-block { float: none; display: flex; justify-content: flex-end; margin: 4px 0 0; }
 
 /* Форма нового опроса над полем ввода */
@@ -1677,7 +1692,6 @@ body.kb-open .pv-sheet { padding-bottom: 8px; }
 .best { min-width: 0; }
 .b-pic { position: absolute; inset: 0; overflow: hidden; background: var(--panel-2); }
 .b-pic img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
-.b-pic .play { position: absolute; right: 10px; top: 10px; z-index: 1; background: rgba(0, 0, 0, .6); border-radius: 999px; padding: 2px 9px; font-size: 12px; font-weight: 700; color: var(--accent-2); }
 .b-num {
   position: absolute; z-index: 2; font-family: var(--font-logo); line-height: 1; pointer-events: none;
   color: transparent; -webkit-text-stroke: 1.5px var(--rc, rgba(255, 255, 255, .8)); text-shadow: 0 0 16px var(--rg, transparent);
@@ -1761,14 +1775,10 @@ body.kb-open .pv-sheet { padding-bottom: 8px; }
   #galleryGrid[data-cols="5"] .grid.sq { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; }
   #galleryGrid[data-cols="9"] .grid.sq { grid-template-columns: repeat(9, minmax(0, 1fr)); gap: 1px; }
   #galleryGrid[data-cols="5"] .grid.sq .tile, #galleryGrid[data-cols="9"] .grid.sq .tile { border-radius: 2px; }
-  /* В мелкой сетке подписи не влезают: вместо «▶ видео» маленький треугольник, реакции прячем */
+  /* В мелкой сетке подписи не влезают: реакции прячем, круг видео меньше */
   #galleryGrid[data-cols="5"] .tile .rc, #galleryGrid[data-cols="9"] .tile .rc { display: none; }
-  #galleryGrid[data-cols="5"] .tile .play, #galleryGrid[data-cols="9"] .tile .play {
-    font-size: 0; padding: 0; width: 0; height: 0; right: 3px; top: auto; bottom: 3px; border-radius: 0; background: none;
-    border-left: 7px solid var(--accent-2); border-top: 4.5px solid transparent; border-bottom: 4.5px solid transparent;
-    filter: drop-shadow(0 0 2px rgba(0, 0, 0, .9));
-  }
-  #galleryGrid[data-cols="9"] .tile .play { border-left-width: 5px; border-top-width: 3px; border-bottom-width: 3px; right: 2px; bottom: 2px; }
+  #galleryGrid[data-cols="5"] .tile .play { --pl: 26px; border-width: 1.5px; }
+  #galleryGrid[data-cols="9"] .tile .play { --pl: 16px; border-width: 1px; box-shadow: 0 0 6px rgba(255, 79, 216, .7); }
   #galleryGrid[data-cols="5"] .g-month, #galleryGrid[data-cols="9"] .g-month {
     display: block; grid-column: 1 / -1; margin: 14px 0 6px; padding: 0 2px; font-size: 16px; font-weight: 800; color: var(--fg);
   }
@@ -1832,7 +1842,6 @@ body.kb-open .pv-sheet { padding-bottom: 8px; }
 .batch-hero { position: relative; display: block; width: 100%; padding: 0; border: 0; border-radius: 18px 18px 0 0; overflow: hidden; background: var(--panel-2); cursor: pointer; }
 .batch-hero img { display: block; width: 100%; max-height: min(70vh, 640px); object-fit: cover; }
 .batch-hero .noimg { display: grid; place-items: center; aspect-ratio: 4 / 3; color: var(--muted); font-size: 32px; }
-.batch-hero .play { position: absolute; right: 10px; top: 10px; background: rgba(0, 0, 0, .6); border-radius: 999px; padding: 3px 10px; font-size: 13px; font-weight: 700; color: var(--accent-2); }
 .batch-cap { position: absolute; left: 10px; bottom: 10px; max-width: calc(100% - 20px); background: rgba(0, 0, 0, .55); padding: 5px 10px; border-radius: 10px; font-size: 13px; font-weight: 600; color: #fff; text-align: left; }
 .batch .grid.sq { margin-top: 3px; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 3px; }
 .batch .grid.sq .tile { border-radius: 0; }
@@ -1915,7 +1924,8 @@ body.in-chat .netbar, body.viewer-open .netbar { display: none; }
 .search-box { display: flex; align-items: center; gap: 10px; padding: 0 16px; height: 52px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); }
 .search-box:focus-within { border-color: var(--accent); box-shadow: var(--glow); }
 .search-box svg { width: 20px; height: 20px; flex: none; fill: none; stroke: var(--muted); stroke-width: 2; stroke-linecap: round; }
-.search-box input { flex: 1; min-width: 0; border: 0; background: transparent; color: var(--fg); font: inherit; font-size: 16px; outline: none; height: 100%; }
+.search-box input, .search-box input:focus, .search-box input:focus-visible { flex: 1; min-width: 0; border: 0; border-radius: 0; padding: 0; box-shadow: none; background: transparent; color: var(--fg); font: inherit; font-size: 16px; outline: none; height: 100%; }
+.search-box input::-webkit-search-decoration, .search-box input::-webkit-search-cancel-button { -webkit-appearance: none; appearance: none; }
 #searchRes { display: grid; gap: 14px; }
 .sr-h { margin: 6px 0 0; font-size: 18px; }
 .sr-h small { color: var(--muted); font-weight: 600; font-size: 14px; }
@@ -1957,7 +1967,8 @@ body.in-chat .netbar, body.viewer-open .netbar { display: none; }
 /* Админка */
 .adm-list { display: grid; gap: 6px; margin-top: 10px; }
 .adm-row { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; padding: 8px 10px; border-radius: 12px; background: rgba(255, 255, 255, .03); }
-.adm-row > span:first-of-type, .adm-row > b { flex: 1; min-width: 160px; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.adm-row > span:first-of-type:not(.ava), .adm-row > b { flex: 1; min-width: 160px; display: grid; gap: 2px; overflow-wrap: anywhere; }
+.adm-row > .ava { flex: none; }
 .adm-row small { color: var(--muted); font-size: 12px; }
 .adm-row.unread { box-shadow: inset 3px 0 0 var(--accent); }
 .adm-acts { display: flex; gap: 12px; flex-wrap: wrap; }
@@ -2077,3 +2088,97 @@ a:focus-visible, button:focus-visible, [role="button"]:focus-visible, [tabindex]
 .fa-q { display: grid; gap: 2px; color: var(--fg); text-decoration: none; font-size: 13px; font-style: italic; }
 .fa-q small { font-style: normal; color: var(--muted); }
 .feed-col > .feed-top, .feed-col > .newsbar { margin-bottom: 22px; }
+
+/* Перетаскивание фото и видео в чат */
+.drop-ov { position: absolute; inset: 8px; z-index: 30; display: grid; place-items: center; border-radius: 18px; border: 2px dashed var(--accent);
+  background: rgba(12, 9, 20, .82); pointer-events: none; animation: fade .15s ease both; }
+.drop-ov div { display: grid; gap: 4px; text-align: center; }
+.drop-ov b { font-size: 18px; color: var(--fg); text-shadow: 0 0 12px rgba(255, 79, 216, .6); }
+.drop-ov span { color: var(--muted); font-size: 14px; }
+/* Избранное */
+.chat-ava.saved { background: none; overflow: visible; }
+.chat-ava.saved svg { display: block; width: 100%; height: 100%; }
+button.chat-row { width: 100%; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+
+/* Плеер голосовых под шапкой чата */
+.vbar { display: grid; gap: 6px; padding: 8px 16px 0; background: rgba(33, 26, 49, .92); border-bottom: 1px solid var(--line); animation: rise .2s ease both; }
+.vb-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.vb-play { position: relative; flex: none; width: 34px; height: 34px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; background: var(--accent); color: #fff; box-shadow: var(--glow); }
+.vb-play svg { position: absolute; inset: 0; margin: auto; width: 16px; height: 16px; fill: currentColor; }
+.vb-play .i-pause, .vbar.playing .vb-play .i-play { display: none; }
+.vbar.playing .vb-play .i-pause { display: block; }
+.vb-who { flex: 1; min-width: 0; display: grid; text-align: left; border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: pointer; line-height: 1.25; }
+.vb-who b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vb-who span { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vb-time { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+.vb-speed { flex: none; min-width: 44px; height: 26px; padding: 0 8px; border-radius: 999px; border: 1px solid var(--accent-2); background: transparent; color: var(--accent-2); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; box-shadow: 0 0 8px rgba(62, 230, 255, .3); }
+.vb-close { position: relative; flex: none; width: 30px; height: 30px; border: 0; padding: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer; }
+.vb-close:hover { color: var(--fg); }
+.vb-close svg { position: absolute; inset: 0; margin: auto; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.vb-prog { height: 3px; margin: 0 -16px; background: rgba(255, 255, 255, .1); cursor: pointer; position: relative; }
+.vb-prog::before { content: ""; position: absolute; inset: -8px 0; }
+.vb-prog i { display: block; height: 100%; width: 0; background: var(--accent-2); box-shadow: var(--glow-2); transition: width .25s linear; }
+@media (max-width: 700px) { .vbar { padding: 6px 12px 0; } .vb-prog { margin: 0 -12px; } .vb-time { display: none; } }
+
+/* Значок видео: круг по центру превью (6Б) */
+.tile .play, .b-pic .play, .batch-hero .play, .pv-slide .play {
+  --pl: 54px; position: absolute; inset: 0; margin: auto; z-index: 1; width: var(--pl); height: var(--pl); border-radius: 50%; pointer-events: none;
+  background: rgba(21, 17, 31, .45); border: 2px solid var(--accent); box-shadow: 0 0 14px rgba(255, 79, 216, .7), inset 0 0 10px rgba(255, 79, 216, .35);
+}
+.play svg { position: absolute; inset: 0; margin: auto; width: 42%; height: 42%; fill: #fff; transform: translateX(6%); filter: drop-shadow(0 0 3px rgba(0, 0, 0, .5)); }
+.batch-hero .play, .pv-slide .play { --pl: 72px; }
+@media (max-width: 700px) { .tile .play { --pl: 44px; } }
+
+/* Над лентой: «Лента» слева, порядок и сходки одной капсулой справа (4А) */
+.feedbar { align-items: center; }
+.feedbar .feed-title { margin: 0 auto 0 2px; font-size: 22px; font-weight: 800; text-transform: none; letter-spacing: 0; color: var(--fg); }
+.fseg { display: inline-flex; flex: none; min-height: 48px; border-radius: 16px; border: 1px solid var(--line); background: var(--panel); overflow: hidden; transition: border-color .2s, box-shadow .2s; }
+.fseg:hover { border-color: var(--accent-2); box-shadow: var(--glow-2); }
+.fseg > * { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-width: 48px; padding: 0 13px; border: 0; background: none; color: var(--fg); font: inherit; font-size: 13px; font-weight: 600; text-decoration: none; cursor: pointer; }
+.fseg > * + * { border-left: 1px solid var(--line); }
+.fseg > *:hover { background: var(--panel-2); }
+.fseg svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.fseg a svg { color: var(--accent-2); }
+@media (max-width: 420px) { .fseg > * { padding: 0 11px; } }
+
+/* Значки в подписи списка чатов (10Б) */
+.cr-ic { width: 15px; height: 15px; flex: none; vertical-align: -3px; margin-right: 4px; fill: none; stroke: var(--accent-2); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 0 3px rgba(62, 230, 255, .7)); }
+.cr-dur { font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+/* Окошко «кто поставил реакцию» (17А) */
+.rx-tip { position: fixed; z-index: 400; display: grid; gap: 6px; min-width: 140px; max-width: 240px; padding: 10px 12px; border-radius: 14px; background: rgba(21, 17, 31, .98); border: 1px solid var(--line); box-shadow: 0 10px 30px rgba(0, 0, 0, .6); font-size: 13px; pointer-events: none; animation: fade .15s ease both; }
+.rx-tip-h { font-size: 13px; color: var(--muted); } .rx-tip-h b { color: var(--fg); }
+.rx-tip-p { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.rx-tip-p .ava { width: 22px; height: 22px; font-size: 10px; flex: none; }
+.rx-tip-p span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rx-tip-more { color: var(--muted); font-size: 12px; }
+.react, .m-react, .c-like { -webkit-touch-callout: none; }
+/* Выделение сообщений мышкой (18А): панель поверх шапки чата, галочки и подсветка строки */
+.selbar { position: absolute; top: 0; left: 0; right: 0; z-index: 8; display: flex; align-items: center; gap: 10px; min-height: 64px; padding: 10px 16px;
+  background: rgba(33, 26, 49, .98); border-bottom: 1px solid var(--accent); box-shadow: 0 2px 14px rgba(255, 79, 216, .25); animation: fade .15s ease both; }
+.selbar b { margin-right: auto; font-size: 15px; }
+.sb-x { position: relative; width: 34px; height: 34px; flex: none; border: 0; padding: 0; border-radius: 50%; background: none; color: var(--muted); cursor: pointer; }
+.sb-x:hover { color: var(--fg); background: var(--panel-2); }
+.sb-x svg { position: absolute; inset: 0; margin: auto; width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.sb-btn { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+.sb-btn:hover:not(:disabled) { border-color: var(--accent-2); }
+.sb-btn:disabled { opacity: .4; cursor: default; }
+.sb-btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: var(--glow); }
+.sb-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.msgs.selecting { overflow-x: hidden; }
+.msgs.selecting .msgs-in { padding-left: 34px; }
+.msgs.selecting .msg { position: relative; cursor: pointer; }
+.msgs.selecting .msg::before { content: ""; position: absolute; left: -30px; bottom: 4px; width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--line); box-sizing: border-box; }
+.msgs.selecting .msg.mine::before { left: auto; right: calc(100% + 10px); }
+.msgs.selecting .msg.selected::before { background: var(--accent) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 12.5l4 4 8-9' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / 14px no-repeat; border-color: var(--accent); box-shadow: var(--glow); }
+.msgs.selecting .msg.selected::after { content: ""; position: absolute; z-index: -1; top: -3px; bottom: -3px; left: -100vw; right: -100vw; background: rgba(255, 79, 216, .1); pointer-events: none; opacity: 1; transform: none; transition: none; }
+.msgs-in { isolation: isolate; }
+@media (hover: hover) and (pointer: fine) { .msgs-in [data-bubble] { cursor: pointer; } }
+/* Карточка ссылки в чате (9Б): картинка слева, сайт, заголовок, описание */
+.lp-card { display: flex; margin: 6px 0 2px; min-width: 0; max-width: 360px; border-radius: 12px; overflow: hidden; background: rgba(0, 0, 0, .25); border: 1px solid rgba(255, 255, 255, .08); color: inherit; text-decoration: none; animation: fade .2s ease both; }
+.lp-card:hover { border-color: rgba(62, 230, 255, .4); }
+.lp-img { width: 84px; flex: none; align-self: stretch; min-height: 84px; background: rgba(255, 255, 255, .05); }
+.lp-img img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.lp-tx { display: grid; align-content: center; gap: 2px; min-width: 0; padding: 8px 10px; font-size: 13px; line-height: 1.3; }
+.lp-tx small { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lp-tx b { font-weight: 700; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.lp-tx i { font-style: normal; font-size: 12px; opacity: .75; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

@@ -74,7 +74,7 @@ function pvSlide(x, cur = false) {
   return `<div class="pv-slide${cur ? " media" : ""}" data-pv-id="${x.id}" style="background-image:url('${url(thumbPath(x))}')">${
     x.kind === "video" && cur
       ? `<video src="${url(x.path)}" poster="${url(thumbPath(x))}" data-vthumb="${x.id}" controls autoplay playsinline></video>`
-      : x.kind === "video" ? `<img class="vthumb" ${url(thumbPath(x)) ? `src="${url(thumbPath(x))}"` : ""} data-vthumb="${x.id}" alt="" draggable="false"><span class="pv-play">▶</span>`
+      : x.kind === "video" ? `<img class="vthumb" ${url(thumbPath(x)) ? `src="${url(thumbPath(x))}"` : ""} data-vthumb="${x.id}" alt="" draggable="false">${PLAY_BADGE}`
       : `<img class="fade" src="${url(midPath(x)) || url(x.path)}" alt="${esc(x.caption || "")}" draggable="false">`}</div>`;
 }
 function pvTop(m, list, idx) {

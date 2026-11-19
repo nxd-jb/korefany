@@ -94,6 +94,8 @@ const toDate = d => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) ? new
 const dayText = d => { const x = toDate(d); return `${x.getDate()} ${MONTHS_OF[x.getMonth()]} ${x.getFullYear()}`; };
 
 // Аватар: фото, если корефан его поставил, иначе первая буква имени на цветном кружке
+// Значок видео поверх превью: полупрозрачный круг с неоновым кольцом и треугольником по центру (правка 6Б)
+const PLAY_BADGE = `<span class="play" aria-label="Видео"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6.5v11a.8.8 0 0 0 1.2.7l8.6-5.5a.8.8 0 0 0 0-1.4l-8.6-5.5A.8.8 0 0 0 9 6.5z"/></svg></span>`;
 function avatar(id, big = false) {
   const n = nameOf(id);
   const pic = profile(id)?.avatar_path && url(profile(id).avatar_path);
@@ -499,7 +501,7 @@ async function grid(list, emptyHtml, square = false, { months = false, who = fal
         // Превью видео проверяет fixVideoThumbs: нет или чёрное — сделает новое и подставит
         ? `<img class="${t ? "fade " : ""}vthumb" ${t ? `src="${t}"` : ""} data-vthumb="${m.id}" alt="" loading="lazy" decoding="async">`
         : t ? `<img class="fade" src="${t}" alt="" loading="lazy" decoding="async">` : `<span class="noimg">🖼</span>`}
-      ${m.kind === "video" ? `<span class="play">▶ видео</span>` : ""}
+      ${m.kind === "video" ? `${PLAY_BADGE}` : ""}
       ${rc || cc ? `<span class="rc">${rc ? `🔥 ${rc}` : ""}${rc && cc ? " · " : ""}${cc ? `💬 ${cc}` : ""}</span>` : ""}
       ${who ? `<span class="t-who" style="${ucStyle(m.owner)}">${avatar(m.owner)}<b>${esc(nameOf(m.owner))}</b></span>` : ""}
     </button>`;
