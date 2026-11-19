@@ -1,3 +1,9 @@
+// push.js подключается последним. При запуске из сохранённых данных вход срабатывает раньше, чем он загрузился:
+// syncPush ещё не было, падала ошибка — и следующий шаг (фоновое обновление ленты) не выполнялся
+function pushSoon() {
+  if (typeof syncPush === "function") return syncPush();
+  addEventListener("load", () => { if (typeof syncPush === "function") syncPush(); }, { once: true });
+}
 // Корефаны: переключение страниц, запуск, вход, живые обновления, догон пропущенного, обновление сайта, баннеры.
 // Подключается последним из частей бывшего app.js: в самом конце start() запускает сайт.
 
@@ -187,7 +193,7 @@ function onAuth(event, session, guess = false) {
         if (offline) return;   // без связи — только сохранённое; остальное запустится, когда она вернётся
         state.live = id;
         startLive();
-        syncPush();
+        pushSoon();
         refreshInBackground(cached);
         return;
       }
@@ -224,13 +230,13 @@ function onAuth(event, session, guess = false) {
       state.shown = state.live = id;
       route();
       startLive();
-      syncPush();
+      pushSoon();
     } else if (!offline && state.live !== id) {
       // На экране было сохранённое (связи не было), а теперь сервер ответил и вход продлился:
       // поднимаем живой канал и догружаем свежее. null — «перерисуй, даже если данные те же»: ссылки на фото устарели
       state.live = id;
       startLive();
-      syncPush();
+      pushSoon();
       if (document.querySelector("[data-offline]")) route();   // на экране «Нет связи» — открываем раздел по-настоящему
       refreshInBackground(null);
     }
