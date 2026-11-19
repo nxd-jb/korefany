@@ -753,4 +753,8 @@ function toast(text, action, onAction) {
   setTimeout(hide, action ? 6000 : 2500);   // короткие «Сохранено» не висят над кнопками
 }
 
-start();
+// Запуск — когда загрузились ВСЕ файлы сайта. Раньше start() шёл прямо здесь, а chat.js, social.js и push.js
+// подключены после boot.js: если вход срабатывал быстро (сохранённая сессия), сайт звал loadChats/syncPush/errorScreen
+// раньше, чем они появились, — и первая загрузка падала
+if (document.readyState === "loading") addEventListener("DOMContentLoaded", start, { once: true });
+else start();
